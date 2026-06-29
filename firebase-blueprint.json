@@ -1,0 +1,73 @@
+{
+  "firestore": {
+    "rules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if false;\n    }\n    match /programs/{docId} {\n      allow read, write: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid) && (request.resource == null || request.resource.data.userId == request.auth.uid);\n    }\n    match /registered_programs/{docId} {\n      allow read, write: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid) && (request.resource == null || request.resource.data.userId == request.auth.uid);\n    }\n    match /pautas/{docId} {\n      allow read, write: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid) && (request.resource == null || request.resource.data.userId == request.auth.uid);\n    }\n    match /reportagens/{docId} {\n      allow read, write: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid) && (request.resource == null || request.resource.data.userId == request.auth.uid);\n    }\n    match /agendas/{docId} {\n      allow read, write: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid) && (request.resource == null || request.resource.data.userId == request.auth.uid);\n    }\n  }\n}",
+    "collections": {
+      "programs": {
+        "fields": {
+          "id": { "type": "string" },
+          "nomePrograma": { "type": "string" },
+          "tempoPrograma": { "type": "string" },
+          "blocos": { "type": "array" },
+          "updatedAt": { "type": "timestamp" },
+          "userId": { "type": "string" }
+        }
+      },
+      "registered_programs": {
+        "fields": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "userId": { "type": "string" },
+          "createdAt": { "type": "timestamp" }
+        }
+      },
+      "pautas": {
+        "fields": {
+          "id": { "type": "string" },
+          "titulo": { "type": "string" },
+          "data": { "type": "string" },
+          "programa": { "type": "string" },
+          "descricao": { "type": "string" },
+          "fontes": { "type": "string" },
+          "status": { "type": "string" },
+          "reporter": { "type": "string" },
+          "userId": { "type": "string" },
+          "createdAt": { "type": "timestamp" },
+          "updatedAt": { "type": "timestamp" }
+        }
+      },
+      "reportagens": {
+        "fields": {
+          "id": { "type": "string" },
+          "titulo": { "type": "string" },
+          "descricao": { "type": "string" },
+          "status": { "type": "string" },
+          "userId": { "type": "string" },
+          "createdAt": { "type": "timestamp" },
+          "updatedAt": { "type": "timestamp" }
+        }
+      },
+      "agendas": {
+        "fields": {
+          "id": { "type": "string" },
+          "titulo": { "type": "string" },
+          "dataHora": { "type": "string" },
+          "local": { "type": "string" },
+          "participantes": { "type": "string" },
+          "obs": { "type": "string" },
+          "userId": { "type": "string" },
+          "createdAt": { "type": "timestamp" },
+          "updatedAt": { "type": "timestamp" }
+        }
+      },
+      "colaboradores": {
+        "fields": {
+          "id": { "type": "string" },
+          "nome": { "type": "string" },
+          "funcao": { "type": "string" },
+          "userId": { "type": "string" },
+          "createdAt": { "type": "timestamp" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "TVI NEWSROOM",
+  "description": "Sistema profissional de espelho de programação e teleprompter para produção de telejornais da Rede TVI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
