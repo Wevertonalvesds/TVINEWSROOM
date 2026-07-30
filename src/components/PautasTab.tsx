@@ -62,6 +62,87 @@ export default function PautasTab({ currentUser, colaboradores = [] }: PautasTab
   const [activeProdutorDropdown, setActiveProdutorDropdown] = useState(false);
   const [status, setStatus] = useState<'rascunho' | 'aprovada' | 'arquivada'>('rascunho');
 
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
+  const handleAiGeneratePauta = async () => {
+    if (!titulo.trim()) return;
+    setIsAiLoading(true);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'generate-pauta',
+          theme: titulo
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.result) {
+        setDescricao(data.result);
+      } else {
+        alert(data.error || 'Erro ao gerar pauta com IA.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro de rede ao falar com a IA.');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const handleAiGenerateQuestions = async () => {
+    if (!titulo.trim()) return;
+    setIsAiLoading(true);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'generate-questions',
+          theme: titulo,
+          context: descricao
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.result) {
+        setDescricao(prev => prev ? `${prev}\n\n---\n\n### Perguntas para Entrevista Sugeridas pela IA\n${data.result}` : data.result);
+      } else {
+        alert(data.error || 'Erro ao gerar perguntas com IA.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro de rede ao falar com a IA.');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const handleAiFixGrammar = async () => {
+    if (!descricao.trim()) return;
+    setIsAiLoading(true);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'fix-grammar',
+          text: descricao
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.result) {
+        setDescricao(data.result);
+      } else {
+        alert(data.error || 'Erro ao corrigir ortografia com IA.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro de rede ao falar com a IA.');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
   const LOCAL_P_KEY = 'rede_tvi_pautas_v1';
   const [listOfPrograms, setListOfPrograms] = useState<string[]>([]);
 
@@ -527,6 +608,34 @@ export default function PautasTab({ currentUser, colaboradores = [] }: PautasTab
                     placeholder="Ex: Interdição total da BR-101 após queda de barreira"
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500"
                   />
+                  {titulo.trim().length > 3 && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={isAiLoading}
+                        onClick={handleAiGeneratePauta}
+                        className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 disabled:opacity-50 text-[11px] font-bold rounded-lg transition-all flex items-center gap-1.5 border border-amber-500/20 cursor-pointer"
+                      >
+                        {isAiLoading ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <span>✨ Gerar Pauta Completa</span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isAiLoading}
+                        onClick={handleAiGenerateQuestions}
+                        className="px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 disabled:opacity-50 text-[11px] font-bold rounded-lg transition-all flex items-center gap-1.5 border border-blue-500/20 cursor-pointer"
+                      >
+                        {isAiLoading ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <span>🎙️ Gerar Perguntas de Entrevista</span>
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Sub grid */}
@@ -577,7 +686,18 @@ export default function PautasTab({ currentUser, colaboradores = [] }: PautasTab
                     />
                     {activeReporterDropdown && (() => {
                       const searchStr = reporter.toLowerCase();
-                      const matching = colaboradores.filter(c => 
+                      
+                      // Deduplicate collaborators by trimmed lowercase name
+                      const uniqueColabsMap = new Map<string, typeof colaboradores[0]>();
+                      colaboradores.forEach(c => {
+                        const key = c.nome.trim().toLowerCase();
+                        if (key && !uniqueColabsMap.has(key)) {
+                          uniqueColabsMap.set(key, c);
+                        }
+                      });
+                      const uniqueColabs = Array.from(uniqueColabsMap.values());
+
+                      const matching = uniqueColabs.filter(c => 
                         c.nome.toLowerCase().includes(searchStr)
                       );
                       if (matching.length === 0) return null;
@@ -621,7 +741,15 @@ export default function PautasTab({ currentUser, colaboradores = [] }: PautasTab
                     />
                     {activeProdutorDropdown && (() => {
                       const searchStr = produtor.toLowerCase();
-                      const matching = colaboradores.filter(c => 
+                      const uniqueColabsMap = new Map<string, typeof colaboradores[0]>();
+                      colaboradores.forEach(c => {
+                        const key = c.nome.trim().toLowerCase();
+                        if (key && !uniqueColabsMap.has(key)) {
+                          uniqueColabsMap.set(key, c);
+                        }
+                      });
+                      const uniqueColabs = Array.from(uniqueColabsMap.values());
+                      const matching = uniqueColabs.filter(c => 
                         c.nome.toLowerCase().includes(searchStr)
                       );
                       if (matching.length === 0) return null;
@@ -673,6 +801,22 @@ export default function PautasTab({ currentUser, colaboradores = [] }: PautasTab
                     placeholder="Escreva detalhadamente o enfoque da matéria, o que filmar, o histórico da situação..."
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 resize-y font-sans min-h-[140px]"
                   />
+                  {descricao.trim().length > 5 && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={isAiLoading}
+                        onClick={handleAiFixGrammar}
+                        className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 disabled:opacity-50 text-[11px] font-bold rounded-lg transition-all flex items-center gap-1.5 border border-amber-500/20 cursor-pointer"
+                      >
+                        {isAiLoading ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <span>✨ Corrigir Ortografia e Estilo</span>
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Sources */}

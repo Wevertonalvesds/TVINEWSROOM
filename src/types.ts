@@ -1,3 +1,9 @@
+export interface GCEntry {
+  id: string;
+  titulo: string;
+  subtitulo?: string;
+}
+
 export interface Lauda {
   id: string;
   materia: string;       // Retranca / story slug (only normal blocks)
@@ -6,6 +12,9 @@ export interface Lauda {
   apresentador: string;  // Presenter / reporter
   laudaContent: string;  // Script content for Teleprompter
   driveLink?: string;    // Google Drive file/folder URL
+  aprovado?: boolean;    // Approval status for the mirror/lauda
+  gc?: string;           // Character Generator / Lower third / credits text
+  gcs?: GCEntry[];       // Multiple GC entries with Title and Subtitle
 }
 
 export interface Block {
@@ -17,9 +26,11 @@ export interface Block {
 
 export interface ProgramState {
   nomePrograma: string;
+  editorChefe?: string;
   tempoPrograma: string; // e.g. "00:30:00"
   dataPrograma?: string; // Date of the program e.g. "YYYY-MM-DD"
   blocos: Block[];
+  teleprompterActiveLaudaId?: string | null;
 }
 
 export interface Pauta {
@@ -78,6 +89,8 @@ export interface Colaborador {
   funcao: ColaboradorFuncao;
   userId?: string;
   createdAt?: string;
+  emailAcesso?: string;
+  temLogin?: boolean;
 }
 
 export function capitalizeName(name: string): string {
@@ -94,5 +107,18 @@ export function capitalizeName(name: string): string {
     })
     .join(' ');
 }
+
+export const DEFAULT_MEMBERS = [
+  { email: 'kaikycardososp@gmail.com', name: 'Kaiky Almeida' },
+  { email: 'moonlighterstore@gmail.com', name: 'Ana Luiza Lima' },
+  { email: 'franca.rodrigo1998@gmail.com', name: 'Rodrigo Rangel' },
+  { email: 'samcompop@outlook.com.br', name: 'Samuel Xavier' },
+  { email: 'kauapereira.jrn@gmail.com', name: 'Kauã Pereira' },
+  { email: 'miguelramalhocastilho759@gmail.com', name: 'Miguel Ramalho' },
+  { email: 'weverton.alvesdevetor@gmail.com', name: 'Weverton Souza' },
+  { email: 'adrianrodrigues.tv@gmail.com', name: 'Adrian Rodrigues' },
+  { email: 'luizphilipecintra210@gmail.com', name: 'Luiz Cintra' },
+];
+
 
 

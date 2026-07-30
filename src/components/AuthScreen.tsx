@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { auth, signInWithEmailAndPassword, createUserWithEmailAndPassword, db, getDoc, doc, setDoc } from '../firebase';
 import { Lock, Mail, Tv, UserPlus, LogIn, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { DEFAULT_MEMBERS } from '../types';
 // @ts-ignore
 import logoCor from '../../assets/.aistudio/logo cor.png';
 
@@ -9,15 +10,6 @@ interface AuthScreenProps {
   onBypass?: () => void;
 }
 
-const DEFAULT_MEMBERS = [
-  { email: 'kaikycardososp@gmail.com', name: 'Kaiky Almeida' },
-  { email: 'moonlighterstore@gmail.com', name: 'Ana Luiza Lima' },
-  { email: 'franca.rodrigo1998@gmail.com', name: 'Rodrigo Rangel' },
-  { email: 'samcompop@outlook.com.br', name: 'Samuel Xavier' },
-  { email: 'kauapereira.jrn@gmail.com', name: 'Kauã Pereira' },
-  { email: 'miguelramalhocastilho759@gmail.com', name: 'Miguel Ramalho' },
-  { email: 'weverton.alvesdevetor@gmail.com', name: 'Weverton Souza' },
-];
 const DEFAULT_PASSWORD = 'tvi2026';
 
 const normalizeStr = (str: string) => {

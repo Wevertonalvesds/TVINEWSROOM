@@ -127,6 +127,7 @@ export default function CloudSyncPanel({
           laudasCount: lCount,
           state: {
             nomePrograma: data.nomePrograma || 'SEM TÍTULO',
+            editorChefe: data.editorChefe || '',
             tempoPrograma: data.tempoPrograma || '00:00:00',
             dataPrograma: data.dataPrograma || '',
             blocos: data.blocos || []
@@ -178,6 +179,7 @@ export default function CloudSyncPanel({
         userId: currentUser.uid,
         userEmail: currentUser.email || 'offline-editor@redetvi.com',
         nomePrograma: currentProgramState.nomePrograma,
+        editorChefe: currentProgramState.editorChefe || '',
         tempoPrograma: currentProgramState.tempoPrograma,
         dataPrograma: currentProgramState.dataPrograma || '',
         blocos: currentProgramState.blocos,

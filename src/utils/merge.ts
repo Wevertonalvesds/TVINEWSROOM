@@ -19,6 +19,7 @@ export function mergeProgramState(
 
   // Merge top-level metadata
   const nomePrograma = mergeField(local.nomePrograma, cloud.nomePrograma, base.nomePrograma);
+  const editorChefe = mergeField(local.editorChefe || '', cloud.editorChefe || '', base.editorChefe || '');
   const tempoPrograma = mergeField(local.tempoPrograma, cloud.tempoPrograma, base.tempoPrograma);
   const dataPrograma = mergeField(local.dataPrograma || '', cloud.dataPrograma || '', base.dataPrograma || '');
 
@@ -27,15 +28,46 @@ export function mergeProgramState(
 
   return {
     nomePrograma,
+    editorChefe,
     tempoPrograma,
     dataPrograma,
-    blocos: mergedBlocos
+    blocos: mergedBlocos,
+    teleprompterActiveLaudaId: cloud.teleprompterActiveLaudaId ?? local.teleprompterActiveLaudaId
   };
 }
 
+function isEqualValue(a: any, b: any): boolean {
+  if (a === b) return true;
+  if (a === undefined && b === undefined) return true;
+  if (a === null && b === null) return true;
+  if (typeof a === 'object' && typeof b === 'object' && a !== null && b !== null) {
+    try {
+      return JSON.stringify(a) === JSON.stringify(b);
+    } catch (e) {
+      return false;
+    }
+  }
+  return false;
+}
+
+function isLaudaEqual(a: Lauda, b: Lauda): boolean {
+  return (
+    a.id === b.id &&
+    (a.materia || '') === (b.materia || '') &&
+    (a.duracao || '') === (b.duracao || '') &&
+    (a.tipo || '') === (b.tipo || '') &&
+    (a.apresentador || '') === (b.apresentador || '') &&
+    (a.laudaContent || '') === (b.laudaContent || '') &&
+    (a.driveLink || '') === (b.driveLink || '') &&
+    !!a.aprovado === !!b.aprovado &&
+    (a.gc || '') === (b.gc || '') &&
+    isEqualValue(a.gcs || [], b.gcs || [])
+  );
+}
+
 function mergeField<T>(localVal: T, cloudVal: T, baseVal: T): T {
-  const localChanged = localVal !== baseVal;
-  const cloudChanged = cloudVal !== baseVal;
+  const localChanged = !isEqualValue(localVal, baseVal);
+  const cloudChanged = !isEqualValue(cloudVal, baseVal);
 
   if (localChanged && !cloudChanged) {
     return localVal;
@@ -77,23 +109,23 @@ function mergeBlocks(localBlocks: Block[], cloudBlocks: Block[], baseBlocks: Blo
       const titulo = mergeField(locB.titulo, cldB.titulo, basB.titulo);
       const tipo = locB.tipo; // keep local type
       const laudas = mergeLaudas(locB.laudas, cldB.laudas, basB.laudas);
-      mergedBlocks.push({ id, tipo, titulo, laudas });
+      mergedBlocks.push({ ...basB, ...cldB, ...locB, id, tipo, titulo, laudas });
     } else if (locB && cldB && !basB) {
       // Block added by both: merge them assuming base is empty
       const titulo = locB.titulo || cldB.titulo;
       const laudas = mergeLaudas(locB.laudas, cldB.laudas, []);
-      mergedBlocks.push({ id, tipo: locB.tipo, titulo, laudas });
+      mergedBlocks.push({ ...cldB, ...locB, id, tipo: locB.tipo, titulo, laudas });
     } else if (locB && !cldB && basB) {
       // Deleted in cloud, exists locally
       // Was it modified locally? If so, keep it (resurrect). Otherwise delete it.
-      const modifiedLocally = locB.titulo !== basB.titulo || JSON.stringify(locB.laudas) !== JSON.stringify(basB.laudas);
+      const modifiedLocally = locB.titulo !== basB.titulo || !isEqualValue(locB.laudas, basB.laudas);
       if (modifiedLocally) {
         mergedBlocks.push(locB);
       }
     } else if (!locB && cldB && basB) {
       // Deleted locally, exists in cloud
       // Was it modified in cloud? If so, keep it (resurrect). Otherwise delete it.
-      const modifiedInCloud = cldB.titulo !== basB.titulo || JSON.stringify(cldB.laudas) !== JSON.stringify(basB.laudas);
+      const modifiedInCloud = cldB.titulo !== basB.titulo || !isEqualValue(cldB.laudas, basB.laudas);
       if (modifiedInCloud) {
         mergedBlocks.push(cldB);
       }
@@ -155,8 +187,25 @@ function mergeLaudas(localLaudas: Lauda[], cloudLaudas: Lauda[], baseLaudas: Lau
       const apresentador = mergeField(locL.apresentador, cldL.apresentador, basL.apresentador);
       const laudaContent = mergeField(locL.laudaContent, cldL.laudaContent, basL.laudaContent);
       const driveLink = mergeField(locL.driveLink || '', cldL.driveLink || '', basL.driveLink || '');
+      const aprovado = mergeField(!!locL.aprovado, !!cldL.aprovado, !!basL.aprovado);
+      const gc = mergeField(locL.gc || '', cldL.gc || '', basL.gc || '');
+      const gcs = mergeField(locL.gcs || [], cldL.gcs || [], basL.gcs || []);
 
-      mergedLaudas.push({ id, materia, duracao, tipo, apresentador, laudaContent, driveLink });
+      mergedLaudas.push({
+        ...basL,
+        ...cldL,
+        ...locL,
+        id,
+        materia,
+        duracao,
+        tipo,
+        apresentador,
+        laudaContent,
+        driveLink,
+        aprovado,
+        gc,
+        gcs,
+      });
     } else if (locL && cldL && !basL) {
       // Added in both
       const materia = locL.materia || cldL.materia;
@@ -165,30 +214,34 @@ function mergeLaudas(localLaudas: Lauda[], cloudLaudas: Lauda[], baseLaudas: Lau
       const apresentador = locL.apresentador || cldL.apresentador;
       const laudaContent = locL.laudaContent || cldL.laudaContent;
       const driveLink = locL.driveLink || cldL.driveLink;
-      mergedLaudas.push({ id, materia, duracao, tipo, apresentador, laudaContent, driveLink });
+      const aprovado = locL.aprovado !== undefined ? locL.aprovado : cldL.aprovado;
+      const gc = locL.gc !== undefined ? locL.gc : cldL.gc;
+      const gcs = (locL.gcs && locL.gcs.length > 0) ? locL.gcs : (cldL.gcs || []);
+      mergedLaudas.push({
+        ...cldL,
+        ...locL,
+        id,
+        materia,
+        duracao,
+        tipo,
+        apresentador,
+        laudaContent,
+        driveLink,
+        aprovado,
+        gc,
+        gcs,
+      });
     } else if (locL && !cldL && basL) {
       // Deleted in cloud, exists locally
       // Was it modified locally? If so, keep it. Otherwise delete.
-      const modifiedLocally = 
-        locL.materia !== basL.materia ||
-        locL.duracao !== basL.duracao ||
-        locL.tipo !== basL.tipo ||
-        locL.apresentador !== basL.apresentador ||
-        locL.laudaContent !== basL.laudaContent ||
-        (locL.driveLink || '') !== (basL.driveLink || '');
+      const modifiedLocally = !isLaudaEqual(locL, basL);
       if (modifiedLocally) {
         mergedLaudas.push(locL);
       }
     } else if (!locL && cldL && basL) {
       // Deleted locally, exists in cloud
       // Was it modified in cloud? If so, keep it. Otherwise delete.
-      const modifiedInCloud = 
-        cldL.materia !== basL.materia ||
-        cldL.duracao !== basL.duracao ||
-        cldL.tipo !== basL.tipo ||
-        cldL.apresentador !== basL.apresentador ||
-        cldL.laudaContent !== basL.laudaContent ||
-        (cldL.driveLink || '') !== (basL.driveLink || '');
+      const modifiedInCloud = !isLaudaEqual(cldL, basL);
       if (modifiedInCloud) {
         mergedLaudas.push(cldL);
       }

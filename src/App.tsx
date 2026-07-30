@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { jsPDF } from 'jspdf';
-import { AlertTriangle, Printer, Trash2, X, ExternalLink, FolderX, Plus, ClipboardList, Film, Calendar, Sliders, Presentation, Users } from 'lucide-react';
+import { AlertTriangle, Printer, Trash2, X, ExternalLink, FolderX, Plus, ClipboardList, Film, Calendar, Sliders, Presentation, Users, Home, History, Sparkles, ArrowRight, CheckCircle2, Folder } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Block, Lauda, ProgramState, RegisteredProgram, Colaborador } from './types';
+import { Block, Lauda, ProgramState, RegisteredProgram, Colaborador, DEFAULT_MEMBERS } from './types';
 import Header from './components/Header';
 import ProgramInfo from './components/ProgramInfo';
 import BlockItem from './components/BlockItem';
@@ -12,7 +12,7 @@ import TeleprompterPlayer from './components/TeleprompterPlayer';
 import CloudSyncPanel from './components/CloudSyncPanel';
 import ChangePasswordModal from './components/ChangePasswordModal';
 import ColaboradoresTab from './components/ColaboradoresTab';
-import { auth, googleAuth, onAuthStateChanged, signOut, type User, db, updateDoc, doc, getDoc, getDocs, addDoc, deleteDoc, query, where, collection, onSnapshot } from './firebase';
+import { auth, googleAuth, onAuthStateChanged, signOut, type User, db, updateDoc, doc, getDoc, getDocs, addDoc, deleteDoc, query, where, collection, onSnapshot, orderBy } from './firebase';
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { mergeProgramState } from './utils/merge';
 
@@ -56,6 +56,7 @@ import AuthScreen from './components/AuthScreen';
 import PautasTab from './components/PautasTab';
 import ReportagensTab from './components/ReportagensTab';
 import AgendasTab from './components/AgendasTab';
+import MateriaisBrutosTab from './components/MateriaisBrutosTab';
 // @ts-ignore
 import logoCor from '../assets/.aistudio/logo cor.png';
 
@@ -104,6 +105,7 @@ const generateId = () => Math.random().toString(36).substring(2, 9);
 // Clean empty slate for the program creation
 const initialProgramState: ProgramState = {
   nomePrograma: '',
+  editorChefe: '',
   tempoPrograma: '00:00:00',
   dataPrograma: '',
   blocos: []
@@ -297,29 +299,56 @@ export default function App() {
 
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
-        // Se o cliente local tiver alterações pendentes no nível do Firestore, evitamos sobrescrever.
+        const d = docSnap.data();
+        const cloudTeleprompterActiveLaudaId = d.teleprompterActiveLaudaId || null;
+
+        // Se o cliente local tiver alterações pendentes no nível do Firestore, evitamos sobrescrever o estado completo.
+        // Porém, ainda atualizamos o teleprompterActiveLaudaId para garantir o destaque em tempo real mesmo em edição.
         if (docSnap.metadata.hasPendingWrites) {
+          setState(prevState => {
+            if (prevState.teleprompterActiveLaudaId === cloudTeleprompterActiveLaudaId) {
+              return prevState;
+            }
+            return {
+              ...prevState,
+              teleprompterActiveLaudaId: cloudTeleprompterActiveLaudaId
+            };
+          });
           return;
         }
 
-        const d = docSnap.data();
         const cloudNome = d.nomePrograma || '';
+        const cloudEditorChefe = d.editorChefe || '';
         const cloudTempo = d.tempoPrograma || '00:00:00';
         const cloudData = d.dataPrograma || '';
-        const cloudBlocos = d.blocos || [];
+        const rawBlocos = d.blocos || [];
+
+        const cloudBlocos: Block[] = rawBlocos.map((b: any) => ({
+          ...b,
+          laudas: (b.laudas || []).map((l: any) => ({
+            ...l,
+            gc: l.gc || '',
+            gcs: l.gcs || [],
+            aprovado: !!l.aprovado
+          }))
+        }));
 
         const cloudState: ProgramState = {
           nomePrograma: cloudNome,
+          editorChefe: cloudEditorChefe,
           tempoPrograma: cloudTempo,
           dataPrograma: cloudData,
-          blocos: cloudBlocos
+          blocos: cloudBlocos,
+          teleprompterActiveLaudaId: cloudTeleprompterActiveLaudaId
         };
 
         setState(prevState => {
           const isSame = 
             prevState.nomePrograma === cloudNome &&
+            prevState.editorChefe === cloudEditorChefe &&
             prevState.tempoPrograma === cloudTempo &&
             prevState.dataPrograma === cloudData &&
+            prevState.teleprompterActiveLaudaId === cloudTeleprompterActiveLaudaId &&
             JSON.stringify(prevState.blocos) === JSON.stringify(cloudBlocos);
 
           if (isSame) {
@@ -371,7 +400,15 @@ export default function App() {
     try {
       const local = localStorage.getItem(LOCAL_COLAB_KEY);
       if (local) {
-        loadedColabs = JSON.parse(local);
+        const parsed = JSON.parse(local);
+        const seenNames = new Set<string>();
+        parsed.forEach((c: Colaborador) => {
+          const key = (c.nome || '').trim().toLowerCase();
+          if (key && !seenNames.has(key)) {
+            seenNames.add(key);
+            loadedColabs.push(c);
+          }
+        });
         setColaboradores(loadedColabs);
       }
     } catch (e) {
@@ -384,15 +421,24 @@ export default function App() {
     const q = query(collection(db, 'colaboradores'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const cloudColabs: Colaborador[] = [];
+      const seenNames = new Set<string>();
+
       snapshot.forEach((docSnap) => {
         const d = docSnap.data();
-        cloudColabs.push({
-          id: docSnap.id,
-          nome: d.nome || '',
-          funcao: d.funcao || 'Demais funções',
-          userId: d.userId || '',
-          createdAt: d.createdAt || ''
-        });
+        const rawName = (d.nome || '').trim();
+        const key = rawName.toLowerCase();
+        if (rawName && !seenNames.has(key)) {
+          seenNames.add(key);
+          cloudColabs.push({
+            id: docSnap.id,
+            nome: rawName,
+            funcao: d.funcao || 'Demais funções',
+            userId: d.userId || '',
+            createdAt: d.createdAt || '',
+            emailAcesso: d.emailAcesso || undefined,
+            temLogin: d.temLogin || false
+          });
+        }
       });
       cloudColabs.sort((a, b) => a.nome.localeCompare(b.nome));
       localStorage.setItem(LOCAL_COLAB_KEY, JSON.stringify(cloudColabs));
@@ -437,14 +483,109 @@ export default function App() {
     }
   }, [isPrintingEspelho]);
 
+  // Real-time notifications and logs state
+  const [systemLogs, setSystemLogs] = useState<any[]>([]);
+  const [toasts, setToasts] = useState<any[]>([]);
+
+  // Local helper function to add Toast notification
+  const triggerToast = (userEmail: string, detalhes: string) => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts(prev => [...prev, { id, userEmail, detalhes }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 6000);
+  };
+
+  // Helper to submit a system log to Firestore
+  const logSystemAction = async (tipo: string, detalhes: string) => {
+    if (!currentUser || currentUser.uid === 'offline-editor') return;
+    try {
+      const logsCol = collection(db, 'system_logs');
+      await addDoc(logsCol, {
+        userId: currentUser.uid,
+        userEmail: currentUser.email || 'editor@redetvi.com',
+        tipo,
+        detalhes,
+        programaNome: state.nomePrograma || '',
+        programaId: activeCloudDocId || '',
+        createdAt: new Date().toISOString()
+      });
+    } catch (e) {
+      console.error('Error logging system action:', e);
+    }
+  };
+
+  // Real-time synchronization of system logs & triggering real-time Toast notifications
+  useEffect(() => {
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
+    if (!isCloudUser) return;
+
+    // Track the time the page was opened to ignore old logs for toast notifications
+    const pageLoadTime = Date.now();
+
+    const q = query(
+      collection(db, 'system_logs'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const loadedLogs: any[] = [];
+      
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const d = change.doc.data();
+          const logTime = d.createdAt ? new Date(d.createdAt).getTime() : Date.now();
+          
+          // Only show toast if:
+          // 1. Created after page load (with 3-second tolerance)
+          // 2. Created by a different user
+          // 3. Is an important system action (not low-level typing actions like update_script or update_lauda)
+          const isImportant = d.tipo !== 'update_script' && d.tipo !== 'update_lauda' && d.tipo !== 'update_block_title';
+          if (logTime > pageLoadTime - 3000 && d.userId !== currentUser.uid && isImportant) {
+            triggerToast(d.userEmail || 'Outro usuário', d.detalhes || 'realizou uma alteração');
+          }
+        }
+      });
+
+      snapshot.forEach((docSnap) => {
+        const d = docSnap.data();
+        loadedLogs.push({
+          id: docSnap.id,
+          ...d
+        });
+      });
+
+      // Show latest 30 logs in general history
+      setSystemLogs(loadedLogs.slice(0, 30));
+    }, (error) => {
+      console.error('Error listening to system logs:', error);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [currentUser]);
+
   // Track active navigation tab
-  const [activeTab, setActiveTab] = useState<'pautas' | 'reportagens' | 'espelhos' | 'agendas' | 'teleprompter' | 'colaboradores'>(() => {
-    return (localStorage.getItem('rede_tvi_active_tab') as any) || 'espelhos';
+  const [activeTab, setActiveTab] = useState<'inicio' | 'pautas' | 'reportagens' | 'espelhos' | 'agendas' | 'teleprompter' | 'colaboradores' | 'materiais_brutos'>(() => {
+    const dismissed = sessionStorage.getItem('rede_tvi_dismissed_welcome_v1');
+    if (!dismissed) {
+      return 'inicio';
+    }
+    return (localStorage.getItem('rede_tvi_active_tab') as any) || 'inicio';
   });
 
   useEffect(() => {
+    const isAdmin = currentUser?.email?.toLowerCase() === 'weverton.alvesdevetor@gmail.com';
+    if (activeTab === 'colaboradores' && !isAdmin) {
+      setActiveTab('inicio');
+      return;
+    }
     localStorage.setItem('rede_tvi_active_tab', activeTab);
-  }, [activeTab]);
+    if (activeTab !== 'inicio') {
+      sessionStorage.setItem('rede_tvi_dismissed_welcome_v1', 'true');
+    }
+  }, [activeTab, currentUser]);
 
   // Google OAuth Drive integration state and handlers
   const [googleToken, setGoogleToken] = useState<string | null>(() => {
@@ -527,6 +668,7 @@ export default function App() {
     (window as any).__loadStateCallback = (loadedData: any) => {
       try {
         const nomePrograma = loadedData.nomePrograma || '';
+        const editorChefe = loadedData.editorChefe || '';
         const tempoPrograma = loadedData.tempoPrograma || '00:30:00';
         const rawBlocos = Array.isArray(loadedData.blocos) ? loadedData.blocos : [];
         
@@ -541,7 +683,10 @@ export default function App() {
             tipo: l.tipo || 'VT',
             apresentador: l.apresentador || '',
             laudaContent: l.laudaContent || '',
-            driveLink: l.driveLink || ''
+            driveLink: l.driveLink || '',
+            aprovado: l.aprovado !== undefined ? !!l.aprovado : false,
+            gc: l.gc || '',
+            gcs: l.gcs || []
           }));
 
           return {
@@ -552,7 +697,7 @@ export default function App() {
           };
         });
 
-        const nextState: ProgramState = { nomePrograma, tempoPrograma, blocos };
+        const nextState: ProgramState = { nomePrograma, editorChefe, tempoPrograma, blocos };
         setState(nextState);
       } catch (error) {
         alert('Formato de arquivo inválido. Certifique-se de que o conteúdo é um JSON válido de Espelho.');
@@ -583,6 +728,7 @@ export default function App() {
           userId: currentUser.uid,
           userEmail: currentUser.email || 'editor@redetvi.com',
           nomePrograma: state.nomePrograma,
+          editorChefe: state.editorChefe || '',
           tempoPrograma: state.tempoPrograma,
           dataPrograma: state.dataPrograma || '',
           blocos: state.blocos,
@@ -594,6 +740,7 @@ export default function App() {
         await updateDoc(docRef, payload);
         baseStateRef.current = {
           nomePrograma: state.nomePrograma,
+          editorChefe: state.editorChefe || '',
           tempoPrograma: state.tempoPrograma,
           dataPrograma: state.dataPrograma || '',
           blocos: state.blocos
@@ -659,7 +806,9 @@ export default function App() {
           tipo: 'VT',
           apresentador: '',
           laudaContent: '',
-          driveLink: ''
+          driveLink: '',
+          aprovado: false,
+          gc: ''
         }
       ]
     };
@@ -667,6 +816,7 @@ export default function App() {
       ...prev,
       blocos: [...prev.blocos, newBlock]
     }));
+    logSystemAction('create_block', `Criou o '${newBlock.titulo}'`);
   };
 
   // COMMERCIAL ADDITION
@@ -683,7 +833,9 @@ export default function App() {
           tipo: '',
           apresentador: '',
           laudaContent: '',
-          driveLink: ''
+          driveLink: '',
+          aprovado: false,
+          gc: ''
         }
       ]
     };
@@ -691,6 +843,7 @@ export default function App() {
       ...prev,
       blocos: [...prev.blocos, newBlock]
     }));
+    logSystemAction('create_block', `Adicionou um Intervalo Comercial`);
   };
 
   // BLOCK ACTIONS
@@ -727,6 +880,7 @@ export default function App() {
 
   // LAUDA ACTIONS
   const handleAddLauda = (blockId: string) => {
+    const blockTitle = state.blocos.find(b => b.id === blockId)?.titulo || 'Bloco';
     const newLauda: Lauda = {
       id: generateId(),
       materia: 'NOVA RETRANCA',
@@ -734,7 +888,10 @@ export default function App() {
       tipo: 'VT',
       apresentador: '',
       laudaContent: '',
-      driveLink: ''
+      driveLink: '',
+      aprovado: false,
+      gc: '',
+      gcs: []
     };
     setState(prev => ({
       ...prev,
@@ -745,9 +902,15 @@ export default function App() {
         return b;
       })
     }));
+    logSystemAction('create_lauda', `Adicionou nova lauda ao '${blockTitle}'`);
   };
 
   const handleDeleteLauda = (blockId: string, laudaId: string) => {
+    const block = state.blocos.find(b => b.id === blockId);
+    const lauda = block?.laudas.find(l => l.id === laudaId);
+    const laudaName = lauda?.materia || 'Sem retranca';
+    const blockTitle = block?.titulo || 'Bloco';
+
     setState(prev => ({
       ...prev,
       blocos: prev.blocos.map(b => {
@@ -757,16 +920,27 @@ export default function App() {
         return b;
       })
     }));
+    logSystemAction('delete_lauda', `Excluiu a lauda '${laudaName}' do '${blockTitle}'`);
   };
 
   const handleUpdateLauda = (blockId: string, laudaId: string, fields: Partial<Lauda>) => {
+    const block = state.blocos.find(b => b.id === blockId);
+    const lauda = block?.laudas.find(l => l.id === laudaId);
+    const laudaName = fields.materia || lauda?.materia || 'Sem retranca';
+    const blockTitle = block?.titulo || 'Bloco';
+
+    if (fields.aprovado !== undefined) {
+      const txt = fields.aprovado ? 'Aprovou' : 'Desmarcou aprovação da';
+      logSystemAction('approve_lauda', `${txt} lauda '${laudaName}' do '${blockTitle}'`);
+    }
+
     setState(prev => ({
       ...prev,
       blocos: prev.blocos.map(b => {
         if (b.id === blockId) {
           const updatedLaudas = b.laudas.map(l => {
             if (l.id === laudaId) {
-              return { ...l, ...fields };
+               return { ...l, ...fields };
             }
             return l;
           });
@@ -874,7 +1048,9 @@ export default function App() {
         tipo: l.tipo,
         apresentador: l.apresentador,
         laudaContent: l.laudaContent,
-        driveLink: l.driveLink || ''
+        driveLink: l.driveLink || '',
+        gc: l.gc || '',
+        gcs: l.gcs || []
       }));
       return {
         tipo: b.tipo,
@@ -885,6 +1061,7 @@ export default function App() {
 
     const fileStructure = {
       nomePrograma: state.nomePrograma,
+      editorChefe: state.editorChefe || '',
       tempoPrograma: state.tempoPrograma,
       blocos: cleanBlocksData
     };
@@ -996,6 +1173,9 @@ export default function App() {
           if (lauda.apresentador) {
             printHeaderLine(`APRESENTACÃO: ${lauda.apresentador.toUpperCase()}`, 10, "bold");
           }
+          if (lauda.gc) {
+            printHeaderLine(`GC / CRÉDITOS: ${lauda.gc.toUpperCase()}`, 9, "bold");
+          }
           currentY += 2;
 
           // Main body script content text
@@ -1053,6 +1233,8 @@ export default function App() {
     );
   }
 
+  const isAdmin = currentUser?.email?.toLowerCase() === 'weverton.alvesdevetor@gmail.com';
+
   return (
     <div className="min-h-screen bg-[#0b0b0d] flex flex-col">
       <div className="flex-1 flex min-w-0">
@@ -1061,7 +1243,7 @@ export default function App() {
         <aside className="hidden lg:flex w-72 bg-[#0c0c0e] border-r border-[#18181b]/50 flex-col justify-between shrink-0 no-print select-none p-5">
           <div className="space-y-6">
             <div className="space-y-4">
-              <div className="flex justify-center p-1 h-44 items-center">
+              <div className="flex justify-center p-1 items-center" style={{ width: '240.2px', height: '126px' }}>
                 <img src={logoCor} alt="Rede TVI" className="max-h-full object-contain pointer-events-none" />
               </div>
               {/* Elegant visual separating line */}
@@ -1070,14 +1252,16 @@ export default function App() {
 
             {/* Sidebar Navigation */}
             <nav className="space-y-1.5">
-              {([
+              {[
+                { key: 'inicio', label: 'Início', icon: Home, desc: 'Página inicial e novidades' },
                 { key: 'pautas', label: 'Pautas', icon: ClipboardList, desc: 'Criar e agendar pautas' },
                 { key: 'reportagens', label: 'Reportagens', icon: Film, desc: 'Texto, imagens e fontes' },
                 { key: 'espelhos', label: 'Espelhos (Roteiro)', icon: Sliders, desc: 'Grade dos telejornais' },
                 { key: 'agendas', label: 'Agendas', icon: Calendar, desc: 'Escalas e compromissos' },
                 { key: 'teleprompter', label: 'Teleprompter', icon: Presentation, desc: 'Controles e leitura' },
-                { key: 'colaboradores', label: 'Colaboradores', icon: Users, desc: 'Cadastro de profissionais' },
-              ] as const).map((tab) => {
+                ...(isAdmin ? [{ key: 'colaboradores', label: 'Colaboradores', icon: Users, desc: 'Cadastro de profissionais' }] : []),
+                { key: 'materiais_brutos', label: 'Materiais Brutos', icon: Folder, desc: 'Apoio, imagens e vídeos brutos' },
+              ].map((tab) => {
                 const isActive = activeTab === tab.key;
                 const IconComponent = tab.icon;
                 return (
@@ -1102,13 +1286,6 @@ export default function App() {
               })}
             </nav>
           </div>
-
-          {/* Brand visual bottom signature */}
-          <div className="space-y-3 pt-4 border-t border-zinc-850/60 text-center">
-            <div className="text-[10px] text-zinc-650 font-mono tracking-widest uppercase">
-              REDE TVI • BROADCASTING
-            </div>
-          </div>
         </aside>
 
         {/* RIGHT SIDE AREA (Header and dynamic tabs content) */}
@@ -1125,14 +1302,16 @@ export default function App() {
 
           {/* Mobile Navigation Bar */}
           <div className="lg:hidden border-b border-zinc-850 bg-[#0d0d0f] p-2 flex gap-1.5 justify-around text-[10px] font-bold font-mono tracking-wider uppercase overflow-x-auto scrollbar-none no-print select-none">
-            {([
+            {[
+              { key: 'inicio', label: 'Início' },
               { key: 'pautas', label: 'Pautas' },
               { key: 'reportagens', label: 'Reportagens' },
               { key: 'espelhos', label: 'Espelhos' },
               { key: 'agendas', label: 'Agendas' },
               { key: 'teleprompter', label: 'Prompter' },
-              { key: 'colaboradores', label: 'Equipe' }
-            ] as const).map((tab) => {
+              ...(isAdmin ? [{ key: 'colaboradores', label: 'Equipe' }] : []),
+              { key: 'materiais_brutos', label: 'Brutos' }
+            ].map((tab) => {
               const isActive = activeTab === tab.key;
               return (
                 <button
@@ -1149,7 +1328,7 @@ export default function App() {
           </div>
 
           {/* Dynamic Panel Content loaded inside responsive wrappers */}
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-6 py-6 pb-20">
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-6 py-6 pb-20 bg-black" style={{ backgroundColor: '#000000' }}>
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeTab}
@@ -1159,10 +1338,302 @@ export default function App() {
                 transition={{ duration: 0.15 }}
                 className="space-y-6"
               >
+                {activeTab === 'inicio' && (
+                  <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                    
+                    {/* Welcome Header Hero Banner */}
+                    <div className="p-8 md:p-10 rounded-3xl border border-zinc-800/80 bg-gradient-to-br from-zinc-950 via-[#0d0d0f] to-zinc-900/40 relative overflow-hidden shadow-2xl">
+                      {/* Background decorative ambient glow */}
+                      <div className="absolute -top-10 -right-10 w-40 h-40 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+                      <div className="absolute -bottom-10 -left-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+
+                      <div className="max-w-3xl space-y-4 relative z-10 text-left">
+                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-full font-mono text-[10px] font-bold uppercase tracking-wider">
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Console de Jornalismo</span>
+                        </div>
+                        <h2 className="text-2xl md:text-3xl font-display font-extrabold text-zinc-100 leading-tight tracking-tight">
+                          Olá, <span className="text-amber-500">{(() => {
+                            if (!currentUser) return 'Colaborador';
+                            if (currentUser.uid === 'offline-editor') return 'Editor Local (Offline)';
+                            const email = (currentUser.email || '').toLowerCase().trim();
+                            const uid = currentUser.uid;
+
+                            // Search database list of colaboradores first
+                            let foundColab: Colaborador | undefined = undefined;
+
+                            if (email) {
+                              // A. Match by emailAcesso (exact)
+                              foundColab = colaboradores.find(
+                                c => c.emailAcesso?.toLowerCase().trim() === email
+                              );
+
+                              // B. Match by expected member- id in userId
+                              if (!foundColab) {
+                                const expectedMemberId = `member-${email.replace(/[^a-zA-Z0-9]/g, '-')}`;
+                                foundColab = colaboradores.find(
+                                  c => c.userId === expectedMemberId
+                                );
+                              }
+
+                              // C. Match by email prefix
+                              if (!foundColab) {
+                                const emailPrefix = email.split('@')[0];
+                                foundColab = colaboradores.find(
+                                  c => c.emailAcesso?.toLowerCase().trim().split('@')[0] === emailPrefix
+                                );
+                              }
+                            }
+
+                            // D. Match by exact UID
+                            if (!foundColab && uid) {
+                              foundColab = colaboradores.find(c => c.userId === uid);
+                            }
+
+                            // E. Match by predefined name if email matches a DEFAULT_MEMBER
+                            if (!foundColab && email) {
+                              const matchedDefault = DEFAULT_MEMBERS.find(m => m.email.toLowerCase() === email);
+                              if (matchedDefault) {
+                                foundColab = colaboradores.find(
+                                  c => c.nome.toLowerCase().trim() === matchedDefault.name.toLowerCase().trim()
+                                );
+                              }
+                            }
+
+                            // If found in database, always return their custom name!
+                            if (foundColab) {
+                              return foundColab.nome;
+                            }
+
+                            // Predefined list fallback
+                            if (email) {
+                              const matched = DEFAULT_MEMBERS.find(m => m.email.toLowerCase() === email);
+                              if (matched) return matched.name;
+                            }
+                            
+                            // Email prefix fallback as last resort
+                            if (email) {
+                              const part = email.split('@')[0];
+                              return part.charAt(0).toUpperCase() + part.slice(1);
+                            }
+                            return 'Colaborador';
+                          })()}</span>! 👋
+                        </h2>
+                        <p className="text-zinc-400 text-sm md:text-base leading-relaxed font-sans max-w-2xl">
+                          Bem-vindo ao console central da <strong className="text-zinc-200">TVI Newsroom</strong>. 
+                          Uma suíte integrada para redação e colaboração em tempo real. Gerencie pautas, escreva roteiros, monitore mídias vinculadas ao Google Drive e controle o Teleprompter em um único espaço integrado.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Quick Shortcuts (Bento Style Grid) */}
+                    <div className="space-y-4">
+                      <h3 className="text-xs font-bold font-mono uppercase tracking-wider text-zinc-500 text-left">
+                        Atalhos Rápidos de Operação
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        
+                        {/* Shortcut 1: Espelhos */}
+                        <button
+                          onClick={() => setActiveTab('espelhos')}
+                          className="p-5 rounded-2xl border border-zinc-850 bg-[#0c0c0e]/40 hover:bg-[#121215]/80 hover:border-amber-500/30 transition-all text-left space-y-4 group cursor-pointer"
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-500 flex items-center justify-center transition-all group-hover:scale-110">
+                            <Sliders className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-zinc-200 flex items-center gap-1">
+                              <span>Espelhos (Roteiro)</span>
+                              <ArrowRight className="w-3.5 h-3.5 text-amber-500 opacity-0 group-hover:opacity-100 transition-all transform translate-x-[-4px] group-hover:translate-x-0" />
+                            </h4>
+                            <p className="text-zinc-400 text-xs mt-1.5 leading-relaxed">
+                              Gerencie a grade horária, adicione blocos e escreva os scripts das matérias em tempo real.
+                            </p>
+                          </div>
+                        </button>
+
+                        {/* Shortcut 2: Teleprompter */}
+                        <button
+                          onClick={() => setActiveTab('teleprompter')}
+                          className="p-5 rounded-2xl border border-zinc-850 bg-[#0c0c0e]/40 hover:bg-[#121215]/80 hover:border-indigo-500/30 transition-all text-left space-y-4 group cursor-pointer"
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center transition-all group-hover:scale-110">
+                            <Presentation className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-zinc-200 flex items-center gap-1">
+                              <span>Teleprompter</span>
+                              <ArrowRight className="w-3.5 h-3.5 text-indigo-400 opacity-0 group-hover:opacity-100 transition-all transform translate-x-[-4px] group-hover:translate-x-0" />
+                            </h4>
+                            <p className="text-zinc-400 text-xs mt-1.5 leading-relaxed">
+                              Abra o projetor de estúdio com rolagem automática inteligente e controle remoto de velocidade.
+                            </p>
+                          </div>
+                        </button>
+
+                        {/* Shortcut 3: Pautas */}
+                        <button
+                          onClick={() => setActiveTab('pautas')}
+                          className="p-5 rounded-2xl border border-zinc-850 bg-[#0c0c0e]/40 hover:bg-[#121215]/80 hover:border-emerald-500/30 transition-all text-left space-y-4 group cursor-pointer"
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center transition-all group-hover:scale-110">
+                            <ClipboardList className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-zinc-200 flex items-center gap-1">
+                              <span>Pautas</span>
+                              <ArrowRight className="w-3.5 h-3.5 text-emerald-400 opacity-0 group-hover:opacity-100 transition-all transform translate-x-[-4px] group-hover:translate-x-0" />
+                            </h4>
+                            <p className="text-zinc-400 text-xs mt-1.5 leading-relaxed">
+                              Crie coberturas jornalísticas, defina locais, fotógrafos, repórteres e agende pautas externas.
+                            </p>
+                          </div>
+                        </button>
+
+                        {/* Shortcut 4: Reportagens */}
+                        <button
+                          onClick={() => setActiveTab('reportagens')}
+                          className="p-5 rounded-2xl border border-zinc-850 bg-[#0c0c0e]/40 hover:bg-[#121215]/80 hover:border-blue-500/30 transition-all text-left space-y-4 group cursor-pointer"
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center transition-all group-hover:scale-110">
+                            <Film className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-zinc-200 flex items-center gap-1">
+                              <span>Vídeos & Materiais</span>
+                              <ArrowRight className="w-3.5 h-3.5 text-blue-400 opacity-0 group-hover:opacity-100 transition-all transform translate-x-[-4px] group-hover:translate-x-0" />
+                            </h4>
+                            <p className="text-zinc-400 text-xs mt-1.5 leading-relaxed">
+                              Vincule mídias do Google Drive e scripts externos diretamente na grade de cada exibição.
+                            </p>
+                          </div>
+                        </button>
+
+                      </div>
+                    </div>
+
+                    {/* General System Logs / Alterações em tempo real panel */}
+                    <div className="w-full">
+                      
+                      {/* Right: Activity Stream (Histórico) */}
+                      <div className="p-6 rounded-2xl border border-zinc-850 bg-[#0a0a0c]/50 flex flex-col h-[400px] w-full">
+                        <div className="flex items-center justify-between border-b border-zinc-850 pb-3.5 mb-3.5 shrink-0">
+                          <div className="flex items-center gap-2.5">
+                            <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                            </span>
+                            <div className="text-left">
+                              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-200 font-mono">
+                                Histórico de Alterações Gerais
+                              </h4>
+                              <p className="text-[10px] text-zinc-550 font-sans mt-0.5">
+                                Atividades colaborativas mais recentes em tempo real no sistema.
+                              </p>
+                            </div>
+                          </div>
+                          
+                          <span className="text-[9px] font-mono font-bold uppercase text-zinc-400 bg-zinc-900 border border-zinc-800 px-2 py-1 rounded">
+                            {systemLogs.length} Registros
+                          </span>
+                        </div>
+
+                        {/* Logs body container */}
+                        <div className="flex-1 overflow-y-auto pr-1 space-y-2.5 scrollbar-thin">
+                          {systemLogs.length === 0 ? (
+                            <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-2.5">
+                              <div className="w-10 h-10 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-600">
+                                <History className="w-5 h-5" />
+                              </div>
+                              <div>
+                                <h5 className="text-xs font-bold text-zinc-350">Nenhum Registro Encontrado</h5>
+                                <p className="text-[11px] text-zinc-550 max-w-xs mt-1">
+                                  As ações da equipe de jornalismo aparecerão listadas aqui em tempo real à medida que ocorrerem.
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            systemLogs.map((log) => {
+                              const formatLogTime = (dateStr: string) => {
+                                if (!dateStr) return '';
+                                try {
+                                  const d = new Date(dateStr);
+                                  const hrs = d.getHours().toString().padStart(2, '0');
+                                  const mins = d.getMinutes().toString().padStart(2, '0');
+                                  const day = d.getDate().toString().padStart(2, '0');
+                                  const mth = (d.getMonth() + 1).toString().padStart(2, '0');
+                                  return `${hrs}:${mins} - ${day}/${mth}`;
+                                } catch (e) {
+                                  return '';
+                                }
+                              };
+
+                              // Get distinct icon depending on type
+                              const getLogIcon = (type: string) => {
+                                if (type === 'approve_lauda') return <CheckCircle2 className="w-4 h-4 text-emerald-450" />;
+                                if (type === 'create_block' || type === 'create_lauda') return <Plus className="w-4 h-4 text-indigo-400" />;
+                                if (type === 'delete_block' || type === 'delete_lauda') return <Trash2 className="w-4 h-4 text-red-400" />;
+                                return <Sliders className="w-4 h-4 text-amber-500" />;
+                              };
+
+                              const getLogBg = (type: string) => {
+                                if (type === 'approve_lauda') return 'bg-emerald-500/10 border-emerald-500/20';
+                                if (type === 'create_block' || type === 'create_lauda') return 'bg-indigo-500/10 border-indigo-500/20';
+                                if (type === 'delete_block' || type === 'delete_lauda') return 'bg-red-500/10 border-red-500/20';
+                                return 'bg-amber-500/10 border-amber-500/20';
+                              };
+
+                              const getUserDisplayName = (email: string) => {
+                                if (!email) return 'Usuário';
+                                const emailLower = email.toLowerCase().trim();
+                                const colab = colaboradores.find(c => c.emailAcesso?.toLowerCase().trim() === emailLower);
+                                if (colab) return colab.nome;
+                                const matched = DEFAULT_MEMBERS.find(m => m.email.toLowerCase() === emailLower);
+                                if (matched) return matched.name;
+                                const part = email.split('@')[0];
+                                return part.charAt(0).toUpperCase() + part.slice(1);
+                              };
+
+                              const displayName = getUserDisplayName(log.userEmail);
+
+                              return (
+                                <div
+                                  key={log.id}
+                                  className="p-3.5 rounded-xl border border-zinc-850 bg-zinc-950/40 flex items-start gap-3 text-left transition-all hover:bg-zinc-950/70"
+                                >
+                                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center border shrink-0 ${getLogBg(log.tipo)}`}>
+                                    {getLogIcon(log.tipo)}
+                                  </div>
+                                  <div className="flex-1 min-w-0 space-y-1">
+                                    <p className="text-xs text-zinc-300 leading-normal">
+                                      <strong className="text-zinc-150 font-bold capitalize">{displayName}</strong> {log.detalhes}
+                                    </p>
+                                    {log.programaNome && (
+                                      <span className="text-[10px] text-zinc-500 font-mono block">
+                                        Programa: {log.programaNome}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] font-mono text-zinc-500 whitespace-nowrap pt-0.5 select-none">
+                                    {formatLogTime(log.createdAt)}
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+
+                      </div>
+                    </div>
+
+                  </div>
+                )}
+
                 {activeTab === 'pautas' && <PautasTab currentUser={currentUser} colaboradores={colaboradores} />}
                 {activeTab === 'reportagens' && <ReportagensTab currentUser={currentUser} colaboradores={colaboradores} registeredPrograms={registeredPrograms} />}
                 {activeTab === 'agendas' && <AgendasTab currentUser={currentUser} />}
                 {activeTab === 'colaboradores' && <ColaboradoresTab currentUser={currentUser} />}
+                {activeTab === 'materiais_brutos' && <MateriaisBrutosTab currentUser={currentUser} />}
 
                 {activeTab === 'teleprompter' && (
                   <div className="rounded-2xl border border-zinc-800 bg-[#0f0f11]/40 p-10 text-center space-y-6 max-w-xl mx-auto my-8">
@@ -1223,6 +1694,8 @@ export default function App() {
                     <ProgramInfo
                       nomePrograma={state.nomePrograma}
                       setNomePrograma={(v) => setState(prev => ({ ...prev, nomePrograma: v }))}
+                      editorChefe={state.editorChefe || ''}
+                      setEditorChefe={(v) => setState(prev => ({ ...prev, editorChefe: v }))}
                       tempoPrograma={state.tempoPrograma}
                       setTempoPrograma={(v) => setState(prev => ({ ...prev, tempoPrograma: v }))}
                       dataPrograma={state.dataPrograma || ''}
@@ -1254,9 +1727,18 @@ export default function App() {
                               const d = freshDoc.data();
                               const loaded: ProgramState = {
                                 nomePrograma: d.nomePrograma || '',
+                                editorChefe: d.editorChefe || '',
                                 tempoPrograma: d.tempoPrograma || '00:00:00',
                                 dataPrograma: d.dataPrograma || '',
-                                blocos: d.blocos || []
+                                blocos: (d.blocos || []).map((b: any) => ({
+                                  ...b,
+                                  laudas: (b.laudas || []).map((l: any) => ({
+                                    ...l,
+                                    gc: l.gc || '',
+                                    gcs: l.gcs || [],
+                                    aprovado: !!l.aprovado
+                                  }))
+                                }))
                               };
                               setState(loaded);
                               baseStateRef.current = loaded;
@@ -1339,6 +1821,7 @@ export default function App() {
                               onMoveLaudaAcrossBlocks={handleMoveLaudaAcrossBlocks}
                               blockDurationStr={blockDurationStr}
                               colaboradores={colaboradores}
+                              teleprompterActiveLaudaId={state.teleprompterActiveLaudaId}
                             />
                           );
                         })
@@ -1370,10 +1853,24 @@ export default function App() {
         onClose={() => setLaudaEditorState({ isOpen: false, blockId: '', lauda: null })}
         materiaTitle={laudaEditorState.lauda?.materia || ''}
         initialContent={laudaEditorState.lauda?.laudaContent || ''}
-        onSave={(updatedContent) => {
+        initialGc={laudaEditorState.lauda?.gc || laudaEditorState.lauda?.gcs?.[0]?.titulo || ''}
+        onSave={(updatedContent, updatedGc) => {
           if (laudaEditorState.blockId && laudaEditorState.lauda) {
+            const existingGcs = laudaEditorState.lauda.gcs || [];
+            let newGcs = [...existingGcs];
+            if (updatedGc.trim() !== '') {
+              if (newGcs.length > 0) {
+                newGcs[0] = { ...newGcs[0], titulo: updatedGc };
+              } else {
+                newGcs = [{ id: '1', titulo: updatedGc, subtitulo: '' }];
+              }
+            } else if (newGcs.length <= 1) {
+              newGcs = [];
+            }
             handleUpdateLauda(laudaEditorState.blockId, laudaEditorState.lauda.id, {
-              laudaContent: updatedContent
+              laudaContent: updatedContent,
+              gc: updatedGc,
+              gcs: newGcs
             });
           }
         }}
@@ -1390,6 +1887,25 @@ export default function App() {
         }}
         programTitle={state.nomePrograma}
         blocos={state.blocos}
+        onActiveLaudaChange={async (laudaId) => {
+          // Always update local state immediately for instant feedback
+          setState(prev => {
+            if (prev.teleprompterActiveLaudaId === laudaId) return prev;
+            return {
+              ...prev,
+              teleprompterActiveLaudaId: laudaId
+            };
+          });
+
+          if (activeCloudDocId && currentUser && currentUser.uid !== 'offline-editor') {
+            try {
+              const docRef = doc(db, 'programs', activeCloudDocId);
+              await updateDoc(docRef, { teleprompterActiveLaudaId: laudaId });
+            } catch (err) {
+              console.error('Error updating teleprompter active lauda:', err);
+            }
+          }
+        }}
       />
 
       {/* Change Password Modal Overlay */}
@@ -1431,10 +1947,12 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => {
+                  const blockTitle = state.blocos.find(b => b.id === deleteBlockId)?.titulo || 'Bloco';
                   setState(prev => ({
                     ...prev,
                     blocos: prev.blocos.filter(b => b.id !== deleteBlockId)
                   }));
+                  logSystemAction('delete_block', `Excluiu o bloco '${blockTitle}'`);
                   setDeleteBlockId(null);
                 }}
                 className="px-4 py-2 bg-red-650 hover:bg-red-600 text-white text-xs font-semibold uppercase tracking-wider rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
@@ -1525,9 +2043,64 @@ export default function App() {
 
       {/* Humble Production Footer */}
       <footer className="w-full py-6 select-none bg-zinc-950/20 text-center border-t border-zinc-900 text-zinc-600 font-mono text-[10px] uppercase tracking-widest no-print">
-        <div>REDE TVI • TODOS OS DIREITOS RESERVADOS COBRINDO A REDE DO JORNALISMO</div>
-        <div className="mt-1 text-zinc-700">MODERN LIVE BROADCAST CONSOLE SYSTEM</div>
+        <div>© TVI NEWSROOM - TODOS OS DIREITOS RESERVADOS</div>
+        <div className="mt-1 text-zinc-700">2026</div>
       </footer>
+
+      {/* Floating real-time change toasts */}
+      <div className="fixed bottom-6 right-6 z-50 pointer-events-none flex flex-col gap-3 max-w-sm w-full px-4 md:px-0 no-print">
+        <AnimatePresence>
+          {toasts.map((toast) => {
+            const getDisplayName = (email: string) => {
+              if (!email) return 'Outro usuário';
+              const emailLower = email.toLowerCase().trim();
+              const colab = colaboradores.find(c => c.emailAcesso?.toLowerCase().trim() === emailLower);
+              if (colab) return colab.nome;
+              const matched = DEFAULT_MEMBERS.find(m => m.email.toLowerCase() === emailLower);
+              if (matched) return matched.name;
+              const part = email.split('@')[0];
+              return part.charAt(0).toUpperCase() + part.slice(1);
+            };
+            return (
+              <motion.div
+                key={toast.id}
+                initial={{ opacity: 0, y: 50, scale: 0.9 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8, transition: { duration: 0.15 } }}
+                className="pointer-events-auto bg-zinc-950/95 border border-amber-500/25 text-zinc-100 p-4 rounded-2xl shadow-2xl flex items-start gap-3.5 backdrop-blur-md relative overflow-hidden group hover:border-amber-500/40 transition-colors"
+              >
+                {/* Visual left colored strip */}
+                <div className="absolute top-0 bottom-0 left-0 w-1 bg-gradient-to-b from-amber-500 to-amber-600" />
+                
+                <div className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 shrink-0 mt-0.5">
+                  <Sparkles className="w-4 h-4 animate-pulse" />
+                </div>
+                
+                <div className="flex-1 text-left min-w-0 pr-4">
+                  <h4 className="text-xs font-bold text-amber-500 font-mono uppercase tracking-wider">
+                    Alteração Detectada
+                  </h4>
+                  <p className="text-zinc-300 text-xs mt-1 leading-normal font-sans">
+                    <strong className="text-white font-semibold">{getDisplayName(toast.userEmail)}</strong> {toast.detalhes}
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => {
+                    setToasts(prev => prev.filter(t => t.id !== toast.id));
+                  }}
+                  className="absolute top-3.5 right-3 text-zinc-500 hover:text-zinc-300 transition-colors p-1 cursor-pointer"
+                  title="Fechar"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
+      </div>
+
+
 
       {/* Printable Espelho Rundown Template Portal */}
       {isPrintingEspelho && createPortal(
@@ -1555,7 +2128,7 @@ export default function App() {
           </div>
 
           {/* Metadados Grid */}
-          <div className="grid grid-cols-3 gap-4 border border-black p-4 rounded-lg mb-6 bg-zinc-50" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', border: '1px solid black', padding: '1rem', borderRadius: '0.5rem', marginBottom: '1.5rem', backgroundColor: '#f9f9f9' }}>
+          <div className="grid grid-cols-4 gap-4 border border-black p-4 rounded-lg mb-6 bg-zinc-50" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '1rem', border: '1px solid black', padding: '1rem', borderRadius: '0.5rem', marginBottom: '1.5rem', backgroundColor: '#f9f9f9' }}>
             <div>
               <span className="text-[10px] font-bold text-zinc-500 block uppercase" style={{ fontSize: '10px', fontWeight: 'bold', color: '#666', display: 'block', textTransform: 'uppercase' }}>Data de Exibição</span>
               <span className="text-sm font-semibold text-black" style={{ fontSize: '14px', fontWeight: '600', color: '#000' }}>
@@ -1570,6 +2143,10 @@ export default function App() {
               <span className="text-[10px] font-bold text-zinc-500 block uppercase" style={{ fontSize: '10px', fontWeight: 'bold', color: '#666', display: 'block', textTransform: 'uppercase' }}>Tempo Utilizado</span>
               <span className="text-sm font-semibold text-black" style={{ fontSize: '14px', fontWeight: '600', color: '#000' }}>{tempoUsadoLabel}</span>
             </div>
+            <div>
+              <span className="text-[10px] font-bold text-zinc-500 block uppercase" style={{ fontSize: '10px', fontWeight: 'bold', color: '#666', display: 'block', textTransform: 'uppercase' }}>Editor Chefe</span>
+              <span className="text-sm font-semibold text-black uppercase" style={{ fontSize: '14px', fontWeight: '600', color: '#000' }}>{state.editorChefe || 'Não informado'}</span>
+            </div>
           </div>
 
           {/* Rundown list */}
@@ -1578,7 +2155,7 @@ export default function App() {
               <div key={bloco.id} className="mb-6" style={{ marginBottom: '1.5rem' }}>
                 <h3 className="text-sm font-bold bg-zinc-100 px-3 py-1.5 border border-zinc-300 rounded mb-3 text-zinc-800 uppercase flex justify-between items-center" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', backgroundColor: '#f4f4f5', padding: '0.375rem 0.75rem', border: '1px solid #d4d4d8', borderRadius: '0.25rem', marginBottom: '0.75rem' }}>
                   <span>{bloco.titulo || `BLOCO ${bIdx + 1}`} ({bloco.tipo === 'comercial' ? 'COMERCIAL' : 'CONTEÚDO'})</span>
-                  <span>DUR: {bloco.duracao || '00:00'}</span>
+                  <span>DUR: {formatarSegundosEmHHMMSS(getBlockDurationSeconds(bloco))}</span>
                 </h3>
                 
                 <table className="w-full border-collapse border border-zinc-300 text-left text-xs mb-4" style={{ width: '100%', borderCollapse: 'collapse', border: '1px solid #d4d4d8', fontSize: '11px', marginBottom: '1rem' }}>
@@ -1602,7 +2179,7 @@ export default function App() {
                       bloco.laudas.map((lauda, lIdx) => (
                         <tr key={lauda.id}>
                           <td className="border border-zinc-300 p-2 font-mono text-center text-zinc-600" style={{ border: '1px solid #d4d4d8', padding: '0.5rem', fontFamily: 'monospace', textAlign: 'center' }}>
-                            {String(lIdx + 1).padStart(2, '0')}
+                             {String(lIdx + 1).padStart(2, '0')}
                           </td>
                           <td className="border border-zinc-300 p-2 font-semibold text-black" style={{ border: '1px solid #d4d4d8', padding: '0.5rem', fontWeight: 'bold', color: '#000' }}>
                             {lauda.materia || 'RETRANCA SEM TÍTULO'}
@@ -1614,7 +2191,7 @@ export default function App() {
                             {lauda.apresentador || 'Geral'}
                           </td>
                           <td className="border border-zinc-300 p-2 font-mono text-center text-zinc-700" style={{ border: '1px solid #d4d4d8', padding: '0.5rem', fontFamily: 'monospace', color: '#374151', textAlign: 'center' }}>
-                            {lauda.tempo || '00:00'}
+                            {lauda.duracao || '00:00'}
                           </td>
                         </tr>
                       ))

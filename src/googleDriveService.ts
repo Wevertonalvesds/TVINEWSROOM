@@ -195,13 +195,72 @@ export const uploadFileToDrive = async (
     }
 
     onProgress?.(100);
-
+    
     return {
       id: result.id,
       webViewLink: result.webViewLink || `https://drive.google.com/file/d/${result.id}/view?usp=drivesdk`
     };
   } catch (error: any) {
     console.error('Upload operation error:', error);
+    throw error;
+  }
+};
+
+// Create a new folder inside Google Drive
+export const createDriveFolder = async (token: string, name: string, parentId?: string): Promise<string> => {
+  try {
+    const metadata: any = {
+      name,
+      mimeType: 'application/vnd.google-apps.folder',
+    };
+    if (parentId && parentId.trim()) {
+      metadata.parents = [parentId.trim()];
+    }
+    
+    const response = await fetch('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(metadata)
+    });
+    
+    if (!response.ok) {
+      if (response.status === 401) {
+        disconnectGoogleDrive();
+        throw new Error('Sessão expirada. Reconecte o Google Drive.');
+      }
+      throw new Error('Erro ao criar pasta no Google Drive.');
+    }
+    
+    const data = await response.json();
+    return data.id;
+  } catch (error: any) {
+    console.error('Create folder error:', error);
+    throw error;
+  }
+};
+
+// Delete a file/folder inside Google Drive
+export const deleteDriveFile = async (token: string, fileId: string): Promise<void> => {
+  try {
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+    
+    if (!response.ok) {
+      if (response.status === 401) {
+        disconnectGoogleDrive();
+        throw new Error('Sessão expirada. Reconecte o Google Drive.');
+      }
+      throw new Error('Erro ao deletar arquivo/pasta do Google Drive.');
+    }
+  } catch (error: any) {
+    console.error('Delete file error:', error);
     throw error;
   }
 };

@@ -1,5 +1,5 @@
 import React from 'react';
-import { LogOut, Key } from 'lucide-react';
+import { LogOut, Key, Smartphone } from 'lucide-react';
 
 export default function Header({ 
   userEmail, 

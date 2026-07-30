@@ -68,6 +68,60 @@ export default function ReportagensTab({ currentUser, colaboradores = [], regist
   const [driveLink, setDriveLink] = useState('');
   const [status, setStatus] = useState<'producao' | 'gravada' | 'finalizada' | 'arquivada'>('producao');
 
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
+  const handleAiFixGrammar = async () => {
+    if (!texto.trim()) return;
+    setIsAiLoading(true);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'fix-grammar',
+          text: texto
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.result) {
+        setTexto(data.result);
+      } else {
+        alert(data.error || 'Erro ao corrigir ortografia com IA.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro de rede ao falar com a IA.');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const handleAiSummarize = async () => {
+    if (!texto.trim()) return;
+    setIsAiLoading(true);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'summarize-reportagem',
+          text: texto
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.result) {
+        setTexto(prev => prev ? `${prev}\n\n---\n\n### Resumo da Reportagem por IA\n${data.result}` : data.result);
+      } else {
+        alert(data.error || 'Erro ao resumir reportagem com IA.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro de rede ao falar com a IA.');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
   const LOCAL_REP_KEY = 'rede_tvi_reportagens_v1';
 
   // Load from local or cloud with real-time sync
@@ -524,7 +578,18 @@ export default function ReportagensTab({ currentUser, colaboradores = [], regist
                     />
                     {activeReporterDropdown && (() => {
                       const searchStr = reporter.toLowerCase();
-                      const matching = colaboradores.filter(c => 
+                      
+                      // Deduplicate collaborators by trimmed lowercase name
+                      const uniqueColabsMap = new Map<string, typeof colaboradores[0]>();
+                      colaboradores.forEach(c => {
+                        const key = c.nome.trim().toLowerCase();
+                        if (key && !uniqueColabsMap.has(key)) {
+                          uniqueColabsMap.set(key, c);
+                        }
+                      });
+                      const uniqueColabs = Array.from(uniqueColabsMap.values());
+
+                      const matching = uniqueColabs.filter(c => 
                         c.nome.toLowerCase().includes(searchStr)
                       );
                       if (matching.length === 0) return null;
@@ -567,7 +632,15 @@ export default function ReportagensTab({ currentUser, colaboradores = [], regist
                     />
                     {activeProdutorDropdown && (() => {
                       const searchStr = produtor.toLowerCase();
-                      const matching = colaboradores.filter(c => 
+                      const uniqueColabsMap = new Map<string, typeof colaboradores[0]>();
+                      colaboradores.forEach(c => {
+                        const key = c.nome.trim().toLowerCase();
+                        if (key && !uniqueColabsMap.has(key)) {
+                          uniqueColabsMap.set(key, c);
+                        }
+                      });
+                      const uniqueColabs = Array.from(uniqueColabsMap.values());
+                      const matching = uniqueColabs.filter(c => 
                         c.nome.toLowerCase().includes(searchStr)
                       );
                       if (matching.length === 0) return null;
@@ -653,7 +726,15 @@ export default function ReportagensTab({ currentUser, colaboradores = [], regist
                     />
                     {activeCinegrafistaDropdown && (() => {
                       const searchStr = cinegrafista.toLowerCase();
-                      const matching = colaboradores.filter(c => 
+                      const uniqueColabsMap = new Map<string, typeof colaboradores[0]>();
+                      colaboradores.forEach(c => {
+                        const key = c.nome.trim().toLowerCase();
+                        if (key && !uniqueColabsMap.has(key)) {
+                          uniqueColabsMap.set(key, c);
+                        }
+                      });
+                      const uniqueColabs = Array.from(uniqueColabsMap.values());
+                      const matching = uniqueColabs.filter(c => 
                         c.nome.toLowerCase().includes(searchStr)
                       );
                       if (matching.length === 0) return null;
@@ -692,6 +773,34 @@ export default function ReportagensTab({ currentUser, colaboradores = [], regist
                     placeholder="[AQUI VAI O TEXTO DO REPÓRTER PARA LOCUÇÃO OU PASSAGEM]&#10;Ex: Moradores do bairro industrial sofrem há mais de doze meses com bueiros entupidos e poeira intensa..."
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono resize-y leading-relaxed min-h-[220px]"
                   />
+                  {texto.trim().length > 10 && (
+                    <div className="flex flex-wrap gap-2 pt-1 font-sans">
+                      <button
+                        type="button"
+                        disabled={isAiLoading}
+                        onClick={handleAiFixGrammar}
+                        className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 disabled:opacity-50 text-[11px] font-bold rounded-lg transition-all flex items-center gap-1.5 border border-amber-500/20 cursor-pointer"
+                      >
+                        {isAiLoading ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <span>✨ Corrigir Ortografia e Estilo</span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isAiLoading}
+                        onClick={handleAiSummarize}
+                        className="px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 disabled:opacity-50 text-[11px] font-bold rounded-lg transition-all flex items-center gap-1.5 border border-blue-500/20 cursor-pointer"
+                      >
+                        {isAiLoading ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <span>📝 Resumir Reportagem</span>
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Status da Reportagem */}

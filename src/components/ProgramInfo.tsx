@@ -7,6 +7,8 @@ import { RegisteredProgram } from '../types';
 interface ProgramInfoProps {
   nomePrograma: string;
   setNomePrograma: (v: string) => void;
+  editorChefe: string;
+  setEditorChefe: (v: string) => void;
   tempoPrograma: string;
   setTempoPrograma: (v: string) => void;
   dataPrograma: string;
@@ -30,6 +32,8 @@ interface ProgramInfoProps {
 export default function ProgramInfo({
   nomePrograma,
   setNomePrograma,
+  editorChefe,
+  setEditorChefe,
   tempoPrograma,
   setTempoPrograma,
   dataPrograma,
@@ -69,37 +73,54 @@ export default function ProgramInfo({
         
         {/* Core Inputs */}
         <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="space-y-1.5 text-left col-span-1 sm:col-span-1">
-            <div className="flex items-center justify-between">
-              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-widest">
-                Nome do Programa
-              </label>
-              <button
-                type="button"
-                onClick={() => setIsManagerOpen(true)}
-                className="text-[10px] text-amber-500 hover:text-amber-400 font-bold uppercase tracking-wider cursor-pointer font-sans"
-              >
-                Cadastrar
-              </button>
+          <div className="space-y-3 text-left col-span-1 sm:col-span-1">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-widest">
+                  Nome do Programa
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsManagerOpen(true)}
+                  className="text-[10px] text-amber-500 hover:text-amber-400 font-bold uppercase tracking-wider cursor-pointer font-sans"
+                >
+                  Cadastrar
+                </button>
+              </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  list="registered-programs-datalist"
+                  value={nomePrograma}
+                  onChange={(e) => setNomePrograma(e.target.value)}
+                  placeholder="Ex: TVI NOTÍCIAS"
+                  className="w-full bg-[#111113] border border-zinc-800 text-zinc-100 font-sans text-sm font-medium px-3 py-2 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-transparent transition-all placeholder-zinc-700"
+                />
+                <datalist id="registered-programs-datalist">
+                  {registeredPrograms.map((p) => (
+                    <option key={p.id} value={p.name} />
+                  ))}
+                </datalist>
+              </div>
             </div>
-            <div className="relative">
-              <input
-                type="text"
-                list="registered-programs-datalist"
-                value={nomePrograma}
-                onChange={(e) => setNomePrograma(e.target.value)}
-                placeholder="Ex: TVI NOTÍCIAS"
-                className="w-full bg-[#111113] border border-zinc-800 text-zinc-100 font-sans text-sm font-medium px-3 py-2 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-transparent transition-all placeholder-zinc-700"
-              />
-              <datalist id="registered-programs-datalist">
-                {registeredPrograms.map((p) => (
-                  <option key={p.id} value={p.name} />
-                ))}
-              </datalist>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-widest text-[#9ca3af]">
+                Editor Chefe
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={editorChefe}
+                  onChange={(e) => setEditorChefe(e.target.value)}
+                  placeholder="Nome do Editor"
+                  className="w-full bg-[#111113] border border-zinc-800 text-zinc-100 font-sans text-sm font-medium px-3 py-2 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-transparent transition-all placeholder-zinc-700"
+                />
+              </div>
             </div>
           </div>
 
-          <div className="space-y-1.5 text-left">
+          <div className="space-y-1.5 text-left self-start">
             <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-widest text-[#9ca3af]">
               Data de Exibição
             </label>
@@ -113,7 +134,7 @@ export default function ProgramInfo({
             </div>
           </div>
 
-          <div className="space-y-1.5 text-left">
+          <div className="space-y-1.5 text-left self-start">
             <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-widest text-[#9ca3af]">
               Tempo Previsto
             </label>

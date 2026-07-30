@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { X, FileText, AlertCircle, Clock } from 'lucide-react';
+import { X, FileText, AlertCircle, Clock, RefreshCw, Tv } from 'lucide-react';
 
 interface LaudaModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (content: string) => void;
+  onSave: (content: string, gc: string) => void;
   initialContent: string;
+  initialGc: string;
   materiaTitle: string;
 }
 
@@ -14,13 +15,17 @@ export default function LaudaModal({
   onClose,
   onSave,
   initialContent,
+  initialGc,
   materiaTitle,
 }: LaudaModalProps) {
   const [content, setContent] = useState(initialContent);
+  const [gc, setGc] = useState(initialGc || '');
+  const [isAiLoading, setIsAiLoading] = useState(false);
 
   useEffect(() => {
     setContent(initialContent);
-  }, [initialContent, isOpen]);
+    setGc(initialGc || '');
+  }, [initialContent, initialGc, isOpen]);
 
   if (!isOpen) return null;
 
@@ -35,8 +40,34 @@ export default function LaudaModal({
   const readingTimeStr = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
   const handleSave = () => {
-    onSave(content);
+    onSave(content, gc);
     onClose();
+  };
+
+  const handleAiFixGrammar = async () => {
+    if (!content.trim()) return;
+    setIsAiLoading(true);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'fix-grammar',
+          text: content
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.result) {
+        setContent(data.result);
+      } else {
+        alert(data.error || 'Erro ao corrigir ortografia com IA.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro de rede ao falar com a IA.');
+    } finally {
+      setIsAiLoading(false);
+    }
   };
 
   return (
@@ -70,18 +101,49 @@ export default function LaudaModal({
 
         {/* Content Area */}
         <div className="p-6">
+          {/* GC / Créditos Input Field */}
+          <div className="mb-5 space-y-2">
+            <label htmlFor="gc-input" className="text-xs font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+              <Tv className="w-4 h-4 text-amber-500" />
+              GC / Gerador de Caracteres (Créditos da Matéria)
+            </label>
+            <input
+              id="gc-input"
+              type="text"
+              className="w-full bg-zinc-950 text-zinc-100 font-sans text-sm p-3 border border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent placeholder-zinc-700 shadow-inner transition-colors focus:bg-zinc-950"
+              placeholder="Ex: JOÃO DA SILVA / PRODUTOR LOCAL"
+              value={gc}
+              onChange={(e) => setGc(e.target.value)}
+            />
+          </div>
+
           <div className="flex items-center justify-between mb-2">
             <label htmlFor="script-textarea" className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
               Texto do Teleprompter (TP)
             </label>
-            <button
-              type="button"
-              onClick={() => setContent(prev => prev.toUpperCase())}
-              className="text-[10px] md:text-xs font-bold uppercase tracking-wider bg-zinc-800 hover:bg-zinc-700 hover:text-amber-500 text-zinc-200 px-3 py-1 rounded transition-all cursor-pointer flex items-center gap-1.5 border border-zinc-700/50"
-              title="Transformar todo o texto em letras maiúsculas (Caixa Alta)"
-            >
-              <span>DEIXAR EM MAIÚSCULAS</span>
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={isAiLoading}
+                onClick={handleAiFixGrammar}
+                className="text-[10px] md:text-xs font-bold uppercase tracking-wider bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 disabled:opacity-50 px-3 py-1 rounded transition-all cursor-pointer flex items-center gap-1.5 border border-amber-500/20"
+                title="Corrigir ortografia e padronizar o estilo para TP"
+              >
+                {isAiLoading ? (
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                ) : (
+                  <span>✨ CORRIGIR COM IA</span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setContent(prev => prev.toUpperCase())}
+                className="text-[10px] md:text-xs font-bold uppercase tracking-wider bg-zinc-800 hover:bg-zinc-700 hover:text-amber-500 text-zinc-200 px-3 py-1 rounded transition-all cursor-pointer flex items-center gap-1.5 border border-zinc-700/50"
+                title="Transformar todo o texto em letras maiúsculas (Caixa Alta)"
+              >
+                <span>DEIXAR EM MAIÚSCULAS</span>
+              </button>
+            </div>
           </div>
           <textarea
             id="script-textarea"

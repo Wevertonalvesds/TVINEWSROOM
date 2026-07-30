@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   X, Play, Pause, RotateCcw, Type, ChevronUp, ChevronDown, 
-  FlipHorizontal, Info, Eye, Settings, Keyboard, Bluetooth, BluetoothOff
+  FlipHorizontal, Info, Eye, Settings, Keyboard, Bluetooth, BluetoothOff,
+  ArrowLeft, ArrowRight
 } from 'lucide-react';
-import { Block } from '../types';
+import { Block, GCEntry } from '../types';
 
 interface TeleprompterPlayerProps {
   isOpen: boolean;
   onClose: () => void;
   programTitle: string;
   blocos: Block[];
+  onActiveLaudaChange?: (laudaId: string | null) => void;
 }
 
 const DEFAULT_SHORTCUTS = {
@@ -18,7 +20,9 @@ const DEFAULT_SHORTCUTS = {
   speedDown: 'ArrowDown',
   scrollUp: 'PageUp',
   scrollDown: 'PageDown',
-  reset: 'KeyR'
+  reset: 'KeyR',
+  prevLauda: 'ArrowLeft',
+  nextLauda: 'ArrowRight'
 };
 
 function getFriendlyKeyName(code: string): string {
@@ -42,6 +46,7 @@ export default function TeleprompterPlayer({
   onClose,
   programTitle,
   blocos,
+  onActiveLaudaChange,
 }: TeleprompterPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(3); // 1 to 10
@@ -82,25 +87,118 @@ export default function TeleprompterPlayer({
     return (saved as 'uppercase' | 'lowercase' | 'original') || 'uppercase';
   });
 
+  const [fontFamily, setFontFamily] = useState<'sans' | 'mono'>(() => {
+    const saved = localStorage.getItem('tvi_teleprompter_fontfamily_v1');
+    return (saved as 'sans' | 'mono') || 'mono';
+  });
+
   useEffect(() => {
     localStorage.setItem('tvi_teleprompter_textcase_v1', textCase);
   }, [textCase]);
 
+  useEffect(() => {
+    localStorage.setItem('tvi_teleprompter_fontfamily_v1', fontFamily);
+  }, [fontFamily]);
+
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollIntervalRef = useRef<number | null>(null);
 
-  // Flatten normal blocks with content
+  // Flatten normal and commercial blocks with content
   const scriptsToRead = blocos
-    .filter(b => b.tipo === 'normal')
     .map(b => {
-      // Find stories with text
-      const stories = b.laudas.filter(l => l.materia.trim() !== '' || l.laudaContent.trim() !== '');
+      const isComercial = b.tipo === 'comercial';
+      if (isComercial) {
+        // Find stories inside commercial blocks (e.g. ad clips)
+        const stories = b.laudas.map(l => ({
+          id: l.id,
+          materia: l.materia || 'Comercial / Atração',
+          tipo: l.tipo || 'COMERCIAL',
+          apresentador: l.apresentador || '',
+          laudaContent: l.laudaContent || '',
+          gc: l.gc || '',
+          gcs: l.gcs || []
+        }));
+        return {
+          titulo: b.titulo,
+          isComercial: true,
+          stories
+        };
+      }
+
+      // Find stories with text or GC
+      const stories = b.laudas
+        .filter(l => l.materia.trim() !== '' || l.laudaContent.trim() !== '' || (l.gc && l.gc.trim() !== '') || (l.gcs && l.gcs.length > 0))
+        .map(l => ({
+          id: l.id,
+          materia: l.materia || '',
+          tipo: l.tipo || '',
+          apresentador: l.apresentador || '',
+          laudaContent: l.laudaContent || '',
+          gc: l.gc || '',
+          gcs: l.gcs || []
+        }));
       return {
         titulo: b.titulo,
+        isComercial: false,
         stories
       };
     })
-    .filter(b => b.stories.length > 0);
+    .filter(b => b.isComercial || b.stories.length > 0);
+
+  // Extract all story/lauda IDs in order of reading
+  const allStoryIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const b of scriptsToRead) {
+      for (const s of b.stories) {
+        ids.push(s.id);
+      }
+    }
+    return ids;
+  }, [scriptsToRead]);
+
+  // Smooth scroll to a specific lauda section in the prompter
+  const scrollToLauda = (laudaId: string) => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const el = container.querySelector(`[data-lauda-id="${laudaId}"]`) as HTMLElement;
+    if (el) {
+      const containerRect = container.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const targetScrollTop = container.scrollTop + (elRect.top - containerRect.top) - (containerRect.height * 0.15);
+      container.scrollTo({
+        top: Math.max(0, targetScrollTop),
+        behavior: 'smooth'
+      });
+    }
+  };
+
+  const handlePrevLauda = () => {
+    const currentId = lastSentLaudaIdRef.current;
+    if (!currentId) {
+      const firstId = allStoryIds[0];
+      if (firstId) scrollToLauda(firstId);
+      return;
+    }
+    const idx = allStoryIds.indexOf(currentId);
+    if (idx > 0) {
+      scrollToLauda(allStoryIds[idx - 1]);
+    } else {
+      handleReset();
+    }
+  };
+
+  const handleNextLauda = () => {
+    const currentId = lastSentLaudaIdRef.current;
+    if (!currentId) {
+      const firstId = allStoryIds[0];
+      if (firstId) scrollToLauda(firstId);
+      return;
+    }
+    const idx = allStoryIds.indexOf(currentId);
+    if (idx !== -1 && idx < allStoryIds.length - 1) {
+      scrollToLauda(allStoryIds[idx + 1]);
+    }
+  };
 
   // Auto-scroll loop
   useEffect(() => {
@@ -134,6 +232,62 @@ export default function TeleprompterPlayer({
     };
   }, [isPlaying, speed]);
 
+  // Ref to track the last reported active lauda ID to prevent redundant Firestore calls
+  const lastSentLaudaIdRef = useRef<string | null>(null);
+
+  // Monitor the scroll position to find which lauda is currently passing by the reading line (40% viewport Y)
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || !isOpen) return;
+
+    const checkActiveLauda = () => {
+      const containerRect = container.getBoundingClientRect();
+      // The reading line is at 40% of the container height
+      const readingLineY = containerRect.top + containerRect.height * 0.4;
+      const elements = container.querySelectorAll('.tp-lauda-section');
+      
+      let currentActiveId: string | null = null;
+      for (const node of Array.from(elements)) {
+        const el = node as HTMLElement;
+        const rect = el.getBoundingClientRect();
+        if (rect.top <= readingLineY && rect.bottom >= readingLineY) {
+          currentActiveId = el.getAttribute('data-lauda-id');
+          break;
+        }
+      }
+
+      if (currentActiveId !== lastSentLaudaIdRef.current) {
+        lastSentLaudaIdRef.current = currentActiveId;
+        onActiveLaudaChange?.(currentActiveId);
+      }
+    };
+
+    // Attach scroll event listener
+    container.addEventListener('scroll', checkActiveLauda);
+    
+    // Check initially and on window resize
+    const interval = setInterval(checkActiveLauda, 500); // Fail-safe fallback check every 500ms
+    
+    window.addEventListener('resize', checkActiveLauda);
+    checkActiveLauda();
+
+    return () => {
+      container.removeEventListener('scroll', checkActiveLauda);
+      window.removeEventListener('resize', checkActiveLauda);
+      clearInterval(interval);
+    };
+  }, [isOpen, scriptsToRead, onActiveLaudaChange]);
+
+  // Clean up active lauda on close/unmount
+  useEffect(() => {
+    if (!isOpen) {
+      if (lastSentLaudaIdRef.current !== null) {
+        lastSentLaudaIdRef.current = null;
+        onActiveLaudaChange?.(null);
+      }
+    }
+  }, [isOpen, onActiveLaudaChange]);
+
   // Listen to keyboard controls
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -147,6 +301,8 @@ export default function TeleprompterPlayer({
       else if (e.code === shortcuts.scrollUp) matchedAction = 'Rolar para Cima';
       else if (e.code === shortcuts.scrollDown) matchedAction = 'Rolar para Baixo';
       else if (e.code === shortcuts.reset) matchedAction = 'Reiniciar';
+      else if (e.code === shortcuts.prevLauda) matchedAction = 'Lauda Anterior';
+      else if (e.code === shortcuts.nextLauda) matchedAction = 'Próxima Lauda';
       else if (e.code === 'Escape') matchedAction = 'Fechar Prompter';
       else if (e.code === 'PageDown' || e.key === 'PageDown') matchedAction = 'Avançar (Físico)';
       else if (e.code === 'PageUp' || e.key === 'PageUp') matchedAction = 'Voltar (Físico)';
@@ -194,6 +350,12 @@ export default function TeleprompterPlayer({
       } else if (e.code === shortcuts.reset) {
         e.preventDefault();
         handleReset();
+      } else if (e.code === shortcuts.prevLauda) {
+        e.preventDefault();
+        handlePrevLauda();
+      } else if (e.code === shortcuts.nextLauda) {
+        e.preventDefault();
+        handleNextLauda();
       } else if (e.code === 'Escape') {
         onClose();
       } else {
@@ -219,7 +381,7 @@ export default function TeleprompterPlayer({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, onClose, shortcuts, bindingAction]);
+  }, [isOpen, onClose, shortcuts, bindingAction, allStoryIds]);
 
   if (!isOpen) return null;
 
@@ -323,6 +485,16 @@ export default function TeleprompterPlayer({
             </button>
           </div>
 
+          {/* Font Family Selector */}
+          <button
+            type="button"
+            onClick={() => setFontFamily(f => f === 'mono' ? 'sans' : 'mono')}
+            className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-805 px-3 py-1.5 rounded-lg text-xs hover:bg-zinc-850 text-zinc-300 cursor-pointer transition-colors"
+            title="Alternar estilo da fonte (Courier Mono vs Inter Sans)"
+          >
+            <span className="font-mono text-[10px] font-bold">ESTILO: {fontFamily === 'mono' ? 'COURIER' : 'INTER'}</span>
+          </button>
+
           {/* Speed Indicator */}
           <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs">
             <span className="text-zinc-500">Velocidade:</span>
@@ -368,6 +540,14 @@ export default function TeleprompterPlayer({
             </button>
             
             <button
+              onClick={handlePrevLauda}
+              className="p-2 hover:bg-zinc-850 rounded-lg text-zinc-300 hover:text-white transition-colors cursor-pointer"
+              title="Lauda Anterior"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+
+            <button
               onClick={() => setIsPlaying(!isPlaying)}
               className={`p-2.5 rounded-full transition-all active:scale-95 cursor-pointer ${
                 isPlaying 
@@ -377,6 +557,14 @@ export default function TeleprompterPlayer({
               title={isPlaying ? "Pausar" : "Iniciar Leitura"}
             >
               {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+            </button>
+
+            <button
+              onClick={handleNextLauda}
+              className="p-2 hover:bg-zinc-850 rounded-lg text-zinc-300 hover:text-white transition-colors cursor-pointer"
+              title="Próxima Lauda"
+            >
+              <ArrowRight className="w-5 h-5" />
             </button>
           </div>
 
@@ -403,12 +591,20 @@ export default function TeleprompterPlayer({
       <div className="relative flex-1 bg-[#020205] overflow-hidden flex justify-center">
         
         {/* Eye Alignment Guiders (Horizontal bar in center of screen) */}
-        <div className="absolute top-[40%] left-0 right-0 h-20 border-y-2 border-amber-500/25 bg-amber-500/[0.03] pointer-events-none flex items-center justify-between px-8">
+        <div className="absolute top-[40%] left-0 right-0 h-20 border-y-2 border-amber-500/25 bg-amber-500/[0.03] pointer-events-none flex items-center justify-between px-8 z-10">
           <div className="w-4 h-4 border-l-4 border-t-4 border-amber-500 rounded-tl-sm" />
           <span className="text-[10px] uppercase font-mono tracking-widest text-amber-500/70 select-none hidden md:inline">
             LINHA DE LEITURA DO APRESENTADOR
           </span>
           <div className="w-4 h-4 border-r-4 border-t-4 border-amber-500 rounded-tr-sm" />
+        </div>
+
+        {/* Professional Left and Right Side Indicators */}
+        <div className="absolute top-[40%] left-2 pointer-events-none z-10 hidden md:flex items-center h-20">
+          <div className="w-0 h-0 border-t-[12px] border-t-transparent border-b-[12px] border-b-transparent border-l-[18px] border-l-amber-500 drop-shadow-[0_0_8px_rgba(245,158,11,0.6)] animate-pulse" />
+        </div>
+        <div className="absolute top-[40%] right-2 pointer-events-none z-10 hidden md:flex items-center h-20">
+          <div className="w-0 h-0 border-t-[12px] border-t-transparent border-b-[12px] border-b-transparent border-r-[18px] border-r-amber-500 drop-shadow-[0_0_8px_rgba(245,158,11,0.6)] animate-pulse" />
         </div>
 
         {/* Scrollable teleprompter text container */}
@@ -418,7 +614,7 @@ export default function TeleprompterPlayer({
           style={{ 
             transform: isMirrored ? 'scaleX(-1)' : 'none',
             fontSize: `${fontSize}px`,
-            fontFamily: "'Courier New', Courier, monospace",
+            fontFamily: fontFamily === 'mono' ? "'Courier New', Courier, monospace" : "var(--font-sans), Inter, sans-serif",
             wordBreak: 'break-word',
             overflowWrap: 'break-word'
           }}
@@ -434,29 +630,77 @@ export default function TeleprompterPlayer({
           ) : (
             scriptsToRead.map((bloco, bIdx) => (
               <div key={bIdx} className="mb-16 border-b border-zinc-800/20 pb-12">
-                <div className="text-zinc-600 text-base font-sans font-bold tracking-widest uppercase mb-6 select-none flex items-center gap-2 border-b border-zinc-900 pb-2">
-                  <Eye className="w-4 h-4" /> {bloco.titulo}
-                </div>
-
-                {bloco.stories.map((story, sIdx) => (
-                  <div key={story.id} className="mb-12">
-                    {/* Story Title Slug styled nicely but clear */}
-                    <div className="text-[#ffff00] text-xl font-sans font-bold tracking-wide uppercase select-none mb-3">
-                      # [{story.tipo}] {story.materia || "RETRANCA SEM TITULO"} 
-                      {story.apresentador ? <span className="text-zinc-500 text-sm font-normal ml-3">({story.apresentador})</span> : null}
+                {bloco.isComercial ? (
+                  <div className="text-center py-10 px-6 border-2 border-dashed border-red-500/50 bg-red-950/15 rounded-2xl my-8 select-none">
+                    <div className="text-red-500 text-3xl font-sans font-black tracking-widest uppercase mb-3 animate-pulse">
+                      🚨 {bloco.titulo || "INTERVALO COMERCIAL"} 🚨
+                    </div>
+                    <p className="text-zinc-400 text-lg font-sans max-w-lg mx-auto">
+                      Intervalo Comercial / Break Ativo. Retorno das notícias em breve.
+                    </p>
+                    {bloco.stories.length > 0 && (
+                      <div className="mt-8 text-left max-w-md mx-auto bg-[#0a0a14] border border-zinc-850 p-4 rounded-xl space-y-2.5">
+                        <span className="text-[10px] font-mono text-zinc-500 font-bold uppercase tracking-wider">Itens do Intervalo:</span>
+                        {bloco.stories.map((story, sIdx) => (
+                          <div key={story.id} className="text-sm font-sans text-zinc-300 flex items-center justify-between border-b border-zinc-900 pb-1.5 last:border-0 last:pb-0 tp-lauda-section" data-lauda-id={story.id}>
+                            <span className="font-semibold text-zinc-200">#{sIdx + 1} {story.materia}</span>
+                            {story.laudaContent && <span className="text-zinc-500 text-xs italic ml-2">com roteiro</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div className="text-zinc-600 text-base font-sans font-bold tracking-widest uppercase mb-6 select-none flex items-center gap-2 border-b border-zinc-900 pb-2">
+                      <Eye className="w-4 h-4" /> {bloco.titulo}
                     </div>
 
-                    {/* Story Body Script Text */}
-                    <p 
-                      className="text-zinc-100 leading-[1.8] font-bold tracking-wide whitespace-pre-wrap"
-                      style={{
-                        textTransform: textCase === 'uppercase' ? 'uppercase' : textCase === 'lowercase' ? 'lowercase' : 'none'
-                      }}
-                    >
-                      {story.laudaContent || "--- LAUDA SEM TEXTO ---"}
-                    </p>
-                  </div>
-                ))}
+                    {bloco.stories.map((story, sIdx) => (
+                      <div key={story.id} className="mb-12 tp-lauda-section" data-lauda-id={story.id}>
+                        {/* Story Title Slug styled nicely but clear */}
+                        <div className="text-[#ffff00] text-xl font-sans font-bold tracking-wide uppercase select-none mb-3">
+                          # [{story.tipo}] {story.materia || "RETRANCA SEM TITULO"} 
+                          {story.apresentador ? <span className="text-zinc-500 text-sm font-normal ml-3">({story.apresentador})</span> : null}
+                        </div>
+
+                        {/* GC / Character Generator lower-third indicator */}
+                        {false && ((story.gcs && story.gcs.length > 0) || story.gc) && (
+                          <div className="mb-5 flex flex-wrap gap-2.5 select-none">
+                            {(story.gcs && story.gcs.length > 0 
+                              ? story.gcs 
+                              : (story.gc ? [{ id: 'legacy', titulo: story.gc, subtitulo: '' }] : [])
+                            ).map((gcItem, gIdx) => {
+                              if (!gcItem.titulo) return null;
+                              return (
+                                <div key={gcItem.id || gIdx} className="inline-flex flex-col px-3 py-1.5 bg-rose-950/20 border border-rose-900/30 text-rose-300 rounded-lg text-xs font-mono font-bold tracking-wider uppercase">
+                                  <div className="flex items-center gap-1.5 mb-0.5">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
+                                    <span className="text-[9px] text-rose-400/80">GC #{gIdx + 1}</span>
+                                  </div>
+                                  <span className="text-zinc-100 text-xs font-sans font-bold">{gcItem.titulo}</span>
+                                  {gcItem.subtitulo && (
+                                    <span className="text-rose-400 text-[10px] font-sans font-medium mt-0.5">{gcItem.subtitulo}</span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Story Body Script Text */}
+                        <p 
+                          className="text-zinc-100 leading-[1.8] font-bold tracking-wide whitespace-pre-wrap"
+                          style={{
+                            textTransform: textCase === 'uppercase' ? 'uppercase' : textCase === 'lowercase' ? 'lowercase' : 'none'
+                          }}
+                        >
+                          {story.laudaContent || "--- LAUDA SEM TEXTO ---"}
+                        </p>
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
             ))
           )}
@@ -537,6 +781,8 @@ export default function TeleprompterPlayer({
                       { key: 'scrollUp', label: 'Rolar para Cima (Subir)' },
                       { key: 'scrollDown', label: 'Rolar para Baixo (Descer)' },
                       { key: 'reset', label: 'Reiniciar (Voltar ao Início)' },
+                      { key: 'prevLauda', label: 'Lauda Anterior' },
+                      { key: 'nextLauda', label: 'Próxima Lauda' },
                     ] as const).map((item) => {
                       const isBinding = bindingAction === item.key;
                       return (

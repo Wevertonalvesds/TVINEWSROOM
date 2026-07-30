@@ -12,7 +12,7 @@ interface GoogleDriveModalProps {
   laudaId: string;
   laudaTitulo: string;
   currentLink?: string;
-  onSave: (blockId: string, laudaId: string, driveLink: string) => void;
+  onSave: (blockId: string, laudaId: string, driveLink: string, durationStr?: string) => void;
 }
 
 // Declare global cache for browser local files in order to persist blobs during runtime session
@@ -65,10 +65,35 @@ export default function GoogleDriveModal({
 
   // Upload progress states
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFileDuration, setSelectedFileDuration] = useState<string>('');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Measure selected video duration
+  useEffect(() => {
+    if (selectedFile) {
+      const url = URL.createObjectURL(selectedFile);
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.src = url;
+      video.onloadedmetadata = () => {
+        const totalSeconds = Math.round(video.duration);
+        if (!isNaN(totalSeconds) && totalSeconds > 0) {
+          const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+          const s = (totalSeconds % 60).toString().padStart(2, '0');
+          setSelectedFileDuration(`${m}:${s}`);
+        }
+        URL.revokeObjectURL(url);
+      };
+      video.onerror = () => {
+        URL.revokeObjectURL(url);
+      };
+    } else {
+      setSelectedFileDuration('');
+    }
+  }, [selectedFile]);
 
   const folderId = '1jCABUF0YtmD6OWCyIsv-KYtNzep8z7wn';
 
@@ -318,8 +343,19 @@ export default function GoogleDriveModal({
       
       const driveLink = res.webViewLink || `https://drive.google.com/file/d/${res.id}/view?usp=drivesdk`;
       
+      // Cache locally so we don't have to download/stream if same browser session
+      if (typeof window !== 'undefined') {
+        if (!window.localVideoCache) {
+          window.localVideoCache = {};
+        }
+        window.localVideoCache[selectedFile.name] = {
+          file: selectedFile,
+          url: URL.createObjectURL(selectedFile)
+        };
+      }
+
       // Auto-save & finish modal
-      onSave(blockId, laudaId, driveLink);
+      onSave(blockId, laudaId, driveLink, selectedFileDuration);
       onClose();
     } catch (err: any) {
       console.error(err);
