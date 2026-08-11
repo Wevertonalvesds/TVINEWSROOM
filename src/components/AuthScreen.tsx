@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { auth, signInWithEmailAndPassword, createUserWithEmailAndPassword, db, getDoc, doc, setDoc } from '../firebase';
 import { Lock, Mail, Tv, UserPlus, LogIn, AlertCircle, Eye, EyeOff } from 'lucide-react';
-import { DEFAULT_MEMBERS } from '../types';
+import { DEFAULT_MEMBERS, isUserAdmin } from '../types';
 // @ts-ignore
 import logoCor from '../../assets/.aistudio/logo cor.png';
 
@@ -30,11 +30,30 @@ const findMemberByInput = (input: string) => {
   
   return DEFAULT_MEMBERS.find(m => {
     const normalizedName = normalizeStr(m.name);
-    return (
+    
+    // Check if name matches (contains or equals)
+    const matchesName = (
       normalizedName === normalizedInput ||
       normalizedName.includes(normalizedInput) ||
       normalizedInput.includes(normalizedName)
     );
+    if (matchesName) return true;
+
+    // Check if the input matches the email prefix (e.g. "weverton.alvesdevetor" before "@")
+    const emailParts = m.email.toLowerCase().split('@');
+    if (emailParts.length > 0) {
+      const emailPrefix = emailParts[0];
+      const normalizedEmailPrefix = normalizeStr(emailPrefix);
+      if (
+        normalizedEmailPrefix === normalizedInput ||
+        normalizedEmailPrefix.includes(normalizedInput) ||
+        normalizedInput.includes(normalizedEmailPrefix)
+      ) {
+        return true;
+      }
+    }
+
+    return false;
   });
 };
 
@@ -107,7 +126,7 @@ export default function AuthScreen({ onAuthSuccess, onBypass }: AuthScreenProps)
     }
 
     const cleanInput = inputLogin.toLowerCase().trim();
-    const isDefaultAdmin = (cleanInput === 'redetviespelho' || cleanInput === 'rededetviespelho' || targetEmail.toLowerCase() === 'redetviespelho@redetvi.com' || targetEmail.toLowerCase() === 'rededetviespelho@redetvi.com') && inputPassword === 'espelho123';
+    const isDefaultAdmin = isUserAdmin(targetEmail) && inputPassword === 'espelho123';
 
     const normalizedEmail = targetEmail.toLowerCase().trim();
 
@@ -178,10 +197,10 @@ export default function AuthScreen({ onAuthSuccess, onBypass }: AuthScreenProps)
             const credential = await signInWithEmailAndPassword(auth, targetEmail, inputPassword);
             loggedUser = credential.user;
           } catch (signInErr: any) {
-            // If sign in fails but it's a predefined member using the default password, register them automatically on the fly
-            const isPredefinedDefault = isPredefinedMember && inputPassword === 'tvi2026';
-            if (isPredefinedDefault) {
-              console.log("Predefined member first-time login. Creating account with default password.");
+            // If sign in fails but it's a predefined member, register them automatically on the fly
+            const isPredefinedAuto = isPredefinedMember && inputPassword.length >= 6;
+            if (isPredefinedAuto) {
+              console.log("Predefined member first-time login. Creating account automatically.");
               try {
                 const credential = await createUserWithEmailAndPassword(auth, targetEmail, inputPassword);
                 loggedUser = credential.user;
@@ -193,7 +212,7 @@ export default function AuthScreen({ onAuthSuccess, onBypass }: AuthScreenProps)
                 };
               }
               
-              // Also create custom credential entry in Firestore so it persists even if auth provider is disabled!
+              // Also create custom credential entry in Firestore so it persists
               try {
                 await setDoc(doc(db, 'credenciais', normalizedEmail), {
                   email: targetEmail,
@@ -217,7 +236,7 @@ export default function AuthScreen({ onAuthSuccess, onBypass }: AuthScreenProps)
         });
       }
     } catch (err: any) {
-      console.error('Auth Error:', err);
+      console.warn('Auth credential notice (handled):', err);
       
       // Check if there is an active custom password in Firestore for this predefined user
       let hasCustomPasswordSet = false;
@@ -243,9 +262,21 @@ export default function AuthScreen({ onAuthSuccess, onBypass }: AuthScreenProps)
         console.error("Error checking custom password during fallback:", customDbErr);
       }
 
-      // Fallback for predefined members on default password (only if they don't have a custom password set)
-      if (isPredefinedMember && inputPassword === 'tvi2026' && !hasCustomPasswordSet) {
-        console.log("Entering predefined member via bypass because of auth error.");
+      // Fallback for predefined members on their first login (only if they don't have a custom password set yet)
+      if (isPredefinedMember && !hasCustomPasswordSet) {
+        console.log("Entering predefined member via first-login bypass.");
+        
+        // Register this password as their custom credential in Firestore on the fly!
+        try {
+          await setDoc(doc(db, 'credenciais', normalizedEmail), {
+            email: targetEmail,
+            password: inputPassword,
+            updatedAt: new Date().toISOString()
+          });
+        } catch (dbErr) {
+          console.error("Failed to sync custom credential on fallback bypass:", dbErr);
+        }
+
         onAuthSuccess({
           uid: `member-${normalizedEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
           email: targetEmail
@@ -262,7 +293,7 @@ export default function AuthScreen({ onAuthSuccess, onBypass }: AuthScreenProps)
           email: targetEmail
         });
       } else {
-        setError(err.message || translateError(err.code || ''));
+        setError(translateError(err.code || '') || err.message);
       }
     } finally {
       setLoading(false);
@@ -329,7 +360,7 @@ export default function AuthScreen({ onAuthSuccess, onBypass }: AuthScreenProps)
                   type="text"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="ex: Kaiky Almeida ou seu e-mail"
+                  placeholder="ex: Usuário ou seu e-mail"
                   className="w-full bg-[#111113] border border-zinc-800 focus:border-amber-500/60 rounded-xl py-2.5 pl-11 pr-4 text-sm text-zinc-200 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500/20 transition-all font-sans"
                   required
                 />
@@ -391,12 +422,14 @@ export default function AuthScreen({ onAuthSuccess, onBypass }: AuthScreenProps)
                 <div className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
               ) : (
                 <>
-                  <LogIn className="w-4 h-4 stroke-[2.3]" />
-                  <span>Acessar o Painel</span>
+                  {isSignUp ? <UserPlus className="w-4 h-4 stroke-[2.3]" /> : <LogIn className="w-4 h-4 stroke-[2.3]" />}
+                  <span>{isSignUp ? 'Cadastrar Credencial' : 'Acessar o Painel'}</span>
                 </>
               )}
             </button>
           </form>
+
+
 
         </div>
 

@@ -137,8 +137,17 @@ export default function MateriaisBrutosTab({ currentUser }: MateriaisBrutosTabPr
 
   // Sync token from service on mount/updates
   useEffect(() => {
-    const activeToken = getCachedGoogleToken();
-    setToken(activeToken);
+    const handleSyncToken = () => {
+      const activeToken = getCachedGoogleToken();
+      setToken(activeToken);
+    };
+
+    handleSyncToken(); // Initial sync
+
+    window.addEventListener('rede_tvi_google_connected', handleSyncToken);
+    return () => {
+      window.removeEventListener('rede_tvi_google_connected', handleSyncToken);
+    };
   }, []);
 
   const handleConnect = async () => {
@@ -147,6 +156,7 @@ export default function MateriaisBrutosTab({ currentUser }: MateriaisBrutosTabPr
     try {
       const activeToken = await connectGoogleDrive();
       setToken(activeToken);
+      window.dispatchEvent(new Event('rede_tvi_google_connected'));
     } catch (err: any) {
       console.error(err);
       setError('Falha ao conectar com o Google Drive. Verifique se as permissões foram concedidas.');
@@ -159,6 +169,7 @@ export default function MateriaisBrutosTab({ currentUser }: MateriaisBrutosTabPr
     disconnectGoogleDrive();
     setToken(null);
     setItems([]);
+    window.dispatchEvent(new Event('rede_tvi_google_connected'));
   };
 
   // Fetch files and folders inside the current active folder
@@ -472,6 +483,17 @@ export default function MateriaisBrutosTab({ currentUser }: MateriaisBrutosTabPr
         </div>
       </div>
 
+      {/* Error notice if any */}
+      {error && (
+        <div className="p-4 mb-4 bg-red-950/20 border border-red-900/30 rounded-2xl flex items-start gap-3 text-red-400 text-xs">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <div>
+            <span className="font-bold block mb-0.5">Ocorreu um erro:</span>
+            <span>{error}</span>
+          </div>
+        </div>
+      )}
+
       {!token ? (
         // Unauthenticated state view
         <div className="p-12 text-center border border-zinc-850/80 rounded-3xl bg-zinc-950/40 max-w-xl mx-auto space-y-5 my-8">
@@ -506,17 +528,6 @@ export default function MateriaisBrutosTab({ currentUser }: MateriaisBrutosTabPr
       ) : (
         // Authenticated explorer view
         <div className="space-y-5">
-          
-          {/* Error notice if any */}
-          {error && (
-            <div className="p-4 bg-red-950/20 border border-red-900/30 rounded-2xl flex items-start gap-3 text-red-400 text-xs">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <div>
-                <span className="font-bold block mb-0.5">Ocorreu um erro:</span>
-                <span>{error}</span>
-              </div>
-            </div>
-          )}
 
           {/* Breadcrumb Navigation Trail */}
           <div className="bg-zinc-900/30 border border-zinc-850/80 px-4 py-3 rounded-2xl flex flex-wrap items-center gap-1.5 text-xs no-print select-none">
@@ -735,7 +746,7 @@ export default function MateriaisBrutosTab({ currentUser }: MateriaisBrutosTabPr
                     {folders.map((folder) => (
                       <div
                         key={folder.id}
-                        className="p-3.5 bg-zinc-900/40 hover:bg-zinc-900 border border-zinc-850 hover:border-zinc-800 rounded-xl flex items-center justify-between gap-3 group transition-all"
+                        className="p-3.5 bg-transparent hover:bg-zinc-900/30 border border-zinc-850 rounded-xl flex items-center justify-between gap-3 group transition-all"
                       >
                         <button
                           onClick={() => navigateToFolder(folder.id, folder.name)}
@@ -790,7 +801,7 @@ export default function MateriaisBrutosTab({ currentUser }: MateriaisBrutosTabPr
                       return (
                         <div 
                           key={file.id} 
-                          className="bg-zinc-900/20 border border-zinc-850 hover:border-zinc-800 rounded-2xl overflow-hidden flex flex-col group transition-all hover:shadow-xl"
+                          className="bg-transparent border border-zinc-850 hover:border-zinc-800 rounded-xl overflow-hidden flex flex-col group transition-all"
                         >
                           {/* File Preview thumbnail area */}
                           <div className="aspect-video bg-zinc-950/60 relative flex items-center justify-center border-b border-zinc-900 overflow-hidden">

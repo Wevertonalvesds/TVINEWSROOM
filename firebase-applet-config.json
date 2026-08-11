@@ -3,8 +3,10 @@
   "appId": "1:52631007695:web:240c9450bf7b38bdb062ba",
   "apiKey": "AIzaSyAJUDnwtadLR8Bgi_9LiS7N8nILJNipDjk",
   "authDomain": "studio-994301898-74609.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-29eea805-80cf-485f-b31d-8dc017d2bc0c",
   "storageBucket": "studio-994301898-74609.firebasestorage.app",
   "messagingSenderId": "52631007695",
-  "measurementId": ""
+  "firestoreDatabaseId": "ai-studio-tvinewsroom-29eea805-80cf-485f-b31d-8dc017d2bc0c",
+  "measurementId": "",
+  "oAuthClientId": "52631007695-ukq0kkm76baabid454o19h816orfmram.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
 }

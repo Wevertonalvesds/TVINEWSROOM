@@ -1,18 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { jsPDF } from 'jspdf';
-import { AlertTriangle, Printer, Trash2, X, ExternalLink, FolderX, Plus, ClipboardList, Film, Calendar, Sliders, Presentation, Users, Home, History, Sparkles, ArrowRight, CheckCircle2, Folder } from 'lucide-react';
+import { AlertTriangle, Printer, Trash2, X, ExternalLink, FolderX, Plus, ClipboardList, Film, Calendar, Sliders, Presentation, Users, Home, History, Sparkles, ArrowRight, CheckCircle2, Folder, FileText, Tv, Smartphone, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Block, Lauda, ProgramState, RegisteredProgram, Colaborador, DEFAULT_MEMBERS } from './types';
+import { Block, Lauda, ProgramState, RegisteredProgram, Colaborador, DEFAULT_MEMBERS, isUserAdmin, GCEntry } from './types';
 import Header from './components/Header';
 import ProgramInfo from './components/ProgramInfo';
 import BlockItem from './components/BlockItem';
 import LaudaModal from './components/LaudaModal';
+import LaudaTabEditor from './components/LaudaTabEditor';
 import TeleprompterPlayer from './components/TeleprompterPlayer';
 import CloudSyncPanel from './components/CloudSyncPanel';
 import ChangePasswordModal from './components/ChangePasswordModal';
 import ColaboradoresTab from './components/ColaboradoresTab';
-import { auth, googleAuth, onAuthStateChanged, signOut, type User, db, updateDoc, doc, getDoc, getDocs, addDoc, deleteDoc, query, where, collection, onSnapshot, orderBy } from './firebase';
+import ProgramasTab from './components/ProgramasTab';
+import { auth, googleAuth, onAuthStateChanged, signOut, type User, db, updateDoc, doc, getDoc, getDocs, addDoc, deleteDoc, query, where, collection, onSnapshot, orderBy, setDoc } from './firebase';
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { mergeProgramState } from './utils/merge';
 
@@ -157,12 +159,31 @@ export default function App() {
     });
   };
 
-  const [state, setState] = useState<ProgramState>(initialProgramState);
+  const [state, setState] = useState<ProgramState>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && (parsed.nomePrograma || (parsed.blocos && parsed.blocos.length > 0))) {
+            return parsed;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Erro ao carregar estado inicial do localStorage:", err);
+    }
+    return initialProgramState;
+  });
   const baseStateRef = useRef<ProgramState | null>(null);
   
   const [activeCloudDocId, setActiveCloudDocId] = useState<string | null>(() => {
     return sessionStorage.getItem('rede_tvi_active_cloud_doc_id');
   });
+
+  const [isSavingToCloud, setIsSavingToCloud] = useState(false);
+  const [saveToCloudSuccess, setSaveToCloudSuccess] = useState(false);
+  const [cloudRefreshTrigger, setCloudRefreshTrigger] = useState(0);
 
   const [registeredPrograms, setRegisteredPrograms] = useState<RegisteredProgram[]>([]);
 
@@ -566,8 +587,23 @@ export default function App() {
     };
   }, [currentUser]);
 
+  // Dark/Light Theme state
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    return (localStorage.getItem('tvi_theme') as 'dark' | 'light') || 'dark';
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === 'light') {
+      root.classList.add('light-theme');
+    } else {
+      root.classList.remove('light-theme');
+    }
+    localStorage.setItem('tvi_theme', theme);
+  }, [theme]);
+
   // Track active navigation tab
-  const [activeTab, setActiveTab] = useState<'inicio' | 'pautas' | 'reportagens' | 'espelhos' | 'agendas' | 'teleprompter' | 'colaboradores' | 'materiais_brutos'>(() => {
+  const [activeTab, setActiveTab] = useState<'inicio' | 'pautas' | 'reportagens' | 'espelhos' | 'agendas' | 'teleprompter' | 'colaboradores' | 'materiais_brutos' | 'programas'>(() => {
     const dismissed = sessionStorage.getItem('rede_tvi_dismissed_welcome_v1');
     if (!dismissed) {
       return 'inicio';
@@ -576,8 +612,8 @@ export default function App() {
   });
 
   useEffect(() => {
-    const isAdmin = currentUser?.email?.toLowerCase() === 'weverton.alvesdevetor@gmail.com';
-    if (activeTab === 'colaboradores' && !isAdmin) {
+    const isAdmin = isUserAdmin(currentUser?.email);
+    if ((activeTab === 'colaboradores' || activeTab === 'programas') && !isAdmin) {
       setActiveTab('inicio');
       return;
     }
@@ -595,6 +631,7 @@ export default function App() {
   const handleGoogleConnect = async () => {
     try {
       const provider = new GoogleAuthProvider();
+      provider.addScope('https://www.googleapis.com/auth/drive');
       provider.addScope('https://www.googleapis.com/auth/drive.file');
       provider.addScope('https://www.googleapis.com/auth/drive.metadata.readonly');
 
@@ -649,6 +686,208 @@ export default function App() {
     lauda: null,
   });
 
+  // Browser-like tab states
+  interface OpenedTab {
+    id: string; // e.g., 'espelhos', 'roteiro-[docId]', or 'lauda-[laudaId]'
+    type: 'espelhos' | 'roteiro' | 'lauda' | 'programas';
+    title: string;
+    blockId?: string;
+    laudaId?: string;
+    currentContent?: string;
+    currentGc?: string;
+    currentGcs?: GCEntry[];
+    materiaTitle?: string;
+    programState?: ProgramState; // stored ProgramState for type === 'roteiro'
+    cloudDocId?: string | null; // associated firestore document ID if loaded!
+    hasUnsavedChanges?: boolean;
+  }
+
+  const [openedTabs, setOpenedTabs] = useState<OpenedTab[]>([
+    { id: 'espelhos', type: 'espelhos', title: 'Espelhos' }
+  ]);
+  const [activeTabId, setActiveTabId] = useState<string>('espelhos');
+
+  const handleSelectTab = (targetTabId: string) => {
+    // 1. Save current program state to the old active roteiro tab if leaving one
+    if (activeTabId.startsWith('roteiro-')) {
+      setOpenedTabs(prev => prev.map(t => {
+        if (t.id === activeTabId) {
+          const isDirty = !baseStateRef.current || 
+            state.nomePrograma !== baseStateRef.current.nomePrograma ||
+            state.editorChefe !== baseStateRef.current.editorChefe ||
+            state.tempoPrograma !== baseStateRef.current.tempoPrograma ||
+            state.dataPrograma !== baseStateRef.current.dataPrograma ||
+            JSON.stringify(state.blocos) !== JSON.stringify(baseStateRef.current.blocos);
+
+          return {
+            ...t,
+            programState: { ...state },
+            cloudDocId: activeCloudDocId,
+            hasUnsavedChanges: isDirty
+          };
+        }
+        return t;
+      }));
+    }
+
+    // 2. Set active tab ID
+    setActiveTabId(targetTabId);
+
+    // 3. If target tab is roteiro tab, load its saved program state
+    const targetTab = openedTabs.find(t => t.id === targetTabId);
+    if (targetTab && targetTab.type === 'roteiro' && targetTab.programState) {
+      setState(targetTab.programState);
+      setActiveCloudDocId(targetTab.cloudDocId || null);
+    }
+  };
+
+  const handleOpenRoteiroTab = () => {
+    const tabId = `roteiro-${activeCloudDocId || 'local-' + Date.now().toString()}`;
+    const tabTitle = state.nomePrograma || 'Novo Espelho';
+
+    setOpenedTabs(prev => {
+      const exists = prev.some(t => t.id === tabId);
+      if (!exists) {
+        return [
+          ...prev,
+          {
+            id: tabId,
+            type: 'roteiro',
+            title: tabTitle,
+            programState: { ...state },
+            cloudDocId: activeCloudDocId
+          }
+        ];
+      }
+      return prev.map(t => t.id === tabId ? { ...t, title: tabTitle, programState: { ...state }, cloudDocId: activeCloudDocId } : t);
+    });
+    setActiveTabId(tabId);
+  };
+
+  const handleOpenLaudaTab = (blockId: string, lauda: Lauda) => {
+    const tabId = `lauda-${lauda.id}`;
+    
+    // Check if it already exists
+    const exists = openedTabs.some(t => t.id === tabId);
+    if (!exists) {
+      setOpenedTabs(prev => [
+        ...prev,
+        {
+          id: tabId,
+          type: 'lauda',
+          title: lauda.materia || 'Sem Retranca',
+          blockId,
+          laudaId: lauda.id,
+          currentContent: lauda.laudaContent || '',
+          currentGc: lauda.gc || lauda.gcs?.[0]?.titulo || '',
+          currentGcs: lauda.gcs || [],
+          materiaTitle: lauda.materia || 'Sem Retranca'
+        }
+      ]);
+    } else {
+      // Update its current content from lauda just in case
+      setOpenedTabs(prev => prev.map(t => {
+        if (t.id === tabId) {
+          return {
+            ...t,
+            title: lauda.materia || 'Sem Retranca',
+            materiaTitle: lauda.materia || 'Sem Retranca',
+            currentContent: lauda.laudaContent || '',
+            currentGc: lauda.gc || lauda.gcs?.[0]?.titulo || '',
+            currentGcs: lauda.gcs || [],
+          };
+        }
+        return t;
+      }));
+    }
+    setActiveTabId(tabId);
+  };
+
+  const handleOpenProgramasTab = () => {
+    setActiveTab('programas');
+  };
+
+  const handleUpdateTabTempState = (tabId: string, content: string, gc: string, gcs?: GCEntry[]) => {
+    setOpenedTabs(prev => prev.map(t => {
+      if (t.id === tabId) {
+        return {
+          ...t,
+          currentContent: content,
+          currentGc: gc,
+          currentGcs: gcs || t.currentGcs
+        };
+      }
+      return t;
+    }));
+  };
+
+  const handleSaveLaudaTab = (tabId: string, content: string, gcValue: string, gcsValue?: GCEntry[]) => {
+    const tab = openedTabs.find(t => t.id === tabId);
+    if (!tab || !tab.blockId || !tab.laudaId) return;
+
+    let finalGcs = gcsValue;
+    if (!finalGcs) {
+      const block = state.blocos.find(b => b.id === tab.blockId);
+      const existingGcs = block?.laudas.find(l => l.id === tab.laudaId)?.gcs || [];
+      finalGcs = [...existingGcs];
+      if (gcValue.trim() !== '') {
+        if (finalGcs.length > 0) {
+          finalGcs[0] = { ...finalGcs[0], titulo: gcValue };
+        } else {
+          finalGcs = [{ id: '1', titulo: gcValue, subtitulo: '' }];
+        }
+      } else if (finalGcs.length <= 1) {
+        finalGcs = [];
+      }
+    }
+
+    handleUpdateLauda(tab.blockId, tab.laudaId, {
+      laudaContent: content,
+      gc: gcValue,
+      gcs: finalGcs
+    });
+
+    // Sync title/details inside the tabs
+    setOpenedTabs(prev => prev.map(t => {
+      if (t.id === tabId) {
+        return {
+          ...t,
+          currentContent: content,
+          currentGc: gcValue,
+          currentGcs: finalGcs
+        };
+      }
+      return t;
+    }));
+  };
+
+  const handleCloseTab = (tabId: string) => {
+    const tabToClose = openedTabs.find(t => t.id === tabId);
+    if (tabToClose && tabToClose.blockId && tabToClose.laudaId) {
+      // Auto-save on close to prevent data loss!
+      const content = tabToClose.currentContent || '';
+      const gcValue = tabToClose.currentGc || '';
+      const finalGcs = tabToClose.currentGcs || [];
+
+      handleUpdateLauda(tabToClose.blockId, tabToClose.laudaId, {
+        laudaContent: content,
+        gc: gcValue,
+        gcs: finalGcs
+      });
+    }
+
+    setOpenedTabs(prev => {
+      const filtered = prev.filter(t => t.id !== tabId);
+      // If we closed the active tab, find a new active tab
+      if (activeTabId === tabId) {
+        const index = prev.findIndex(t => t.id === tabId);
+        const nextActive = filtered[index - 1] || filtered[0] || { id: 'espelhos' };
+        setActiveTabId(nextActive.id);
+      }
+      return filtered;
+    });
+  };
+
   // Teleprompter projection active state
   const [isTeleprompterOpen, setIsTeleprompterOpen] = useState(false);
 
@@ -662,6 +901,146 @@ export default function App() {
   const [isPrintAdviceOpen, setIsPrintAdviceOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Real-time online presence state
+  const [onlineUsers, setOnlineUsers] = useState<any[]>([]);
+
+  // Function to get current user location description
+  const getCurrentLocationString = () => {
+    if (isTeleprompterOpen) {
+      return 'No Teleprompter (TP)';
+    }
+    if (activeTab === 'espelhos') {
+      if (activeTabId === 'espelhos') {
+        return 'Lista de Espelhos';
+      }
+      const currentTabObj = openedTabs.find(t => t.id === activeTabId);
+      if (currentTabObj) {
+        if (currentTabObj.type === 'roteiro') {
+          return `Editando Roteiro: ${currentTabObj.title}`;
+        }
+        if (currentTabObj.type === 'lauda') {
+          return `Editando Lauda: ${currentTabObj.title}`;
+        }
+      }
+      return 'Roteiro de Programas';
+    }
+    const tabNames: Record<string, string> = {
+      inicio: 'Página Inicial',
+      pautas: 'Painel de Pautas',
+      reportagens: 'Painel de Reportagens',
+      agendas: 'Painel de Agendas',
+      teleprompter: 'Área do Teleprompter',
+      colaboradores: 'Gerenciando Colaboradores',
+      programas: 'Gerenciando Programas',
+      materiais_brutos: 'Materiais Brutos',
+    };
+    return tabNames[activeTab] || 'Navegando';
+  };
+
+  // Resolve user name from colaboradores list
+  const resolveUserName = (email: string | null | undefined, uid: string) => {
+    if (!email) return 'Usuário';
+    const emailLower = email.toLowerCase().trim();
+    const found = colaboradores.find(c => 
+      (c.emailAcesso && c.emailAcesso.toLowerCase().trim() === emailLower) || 
+      (c.userId && c.userId === uid)
+    );
+    if (found && found.nome) return found.nome;
+    
+    const matched = DEFAULT_MEMBERS.find(m => m.email.toLowerCase() === emailLower);
+    if (matched) return matched.name;
+
+    // Fallback: extract email prefix
+    const prefix = email.split('@')[0];
+    return prefix.charAt(0).toUpperCase() + prefix.slice(1);
+  };
+
+  useEffect(() => {
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
+    if (!isCloudUser) {
+      // Local/offline simulated presence
+      setOnlineUsers([{
+        id: 'offline-editor',
+        userName: 'Editor (Offline)',
+        userEmail: currentUser?.email || 'offline@redetvi.com',
+        location: getCurrentLocationString(),
+        lastActive: new Date().toISOString()
+      }]);
+      return;
+    }
+
+    const myUid = currentUser.uid;
+    const myEmail = currentUser.email || '';
+    const myName = resolveUserName(myEmail, myUid);
+    const locationString = getCurrentLocationString();
+
+    const updatePresence = async () => {
+      try {
+        const userDocRef = doc(db, 'online_users', myUid);
+        await setDoc(userDocRef, {
+          userId: myUid,
+          userEmail: myEmail,
+          userName: myName,
+          location: locationString,
+          lastActive: new Date().toISOString(), // Use client ISO string to make in-memory drift calculations reliable
+        });
+      } catch (err) {
+        console.error('Error updating presence:', err);
+      }
+    };
+
+    // Update immediately on dependencies change
+    updatePresence();
+
+    // Heartbeat every 20 seconds to keep presence fresh
+    const interval = setInterval(updatePresence, 20000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [currentUser, activeTab, activeTabId, isTeleprompterOpen, colaboradores, openedTabs]);
+
+  // Listen to presence of all online users
+  useEffect(() => {
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
+    if (!isCloudUser) return;
+
+    const q = query(collection(db, 'online_users'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const users: any[] = [];
+      const now = Date.now();
+      
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data && data.lastActive) {
+          const lastActiveTime = new Date(data.lastActive).getTime();
+          // Filter out users who haven't updated their status for more than 2.5 minutes (150 seconds)
+          if (now - lastActiveTime < 150000) {
+            users.push({
+              id: docSnap.id,
+              ...data
+            });
+          }
+        }
+      });
+      
+      // Sort: current user first, then by name
+      users.sort((a, b) => {
+        if (a.userId === currentUser.uid) return -1;
+        if (b.userId === currentUser.uid) return 1;
+        return (a.userName || '').localeCompare(b.userName || '');
+      });
+
+      setOnlineUsers(users);
+    }, (error) => {
+      console.error('Error listening to online users:', error);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [currentUser]);
 
   // Expose load capability on window to interconnect clean JSON load callbacks from ProgramInfo
   useEffect(() => {
@@ -699,6 +1078,8 @@ export default function App() {
 
         const nextState: ProgramState = { nomePrograma, editorChefe, tempoPrograma, blocos };
         setState(nextState);
+        setOpenedTabs([{ id: 'roteiro', type: 'roteiro', title: 'Roteiro Principal' }]);
+        setActiveTabId('roteiro');
       } catch (error) {
         alert('Formato de arquivo inválido. Certifique-se de que o conteúdo é um JSON válido de Espelho.');
       }
@@ -714,12 +1095,57 @@ export default function App() {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(state));
   }, [state]);
 
+  // Synchronize global state changes to the corresponding active/cloud roteiro tab in openedTabs
+  useEffect(() => {
+    setOpenedTabs(prev => {
+      let changed = false;
+      const next = prev.map(t => {
+        if (t.type === 'roteiro') {
+          const isCurrentCloudDoc = activeCloudDocId && t.cloudDocId === activeCloudDocId;
+          const isCurrentActiveTab = activeTabId === t.id;
+
+          if (isCurrentCloudDoc || isCurrentActiveTab) {
+            if (t.programState !== state) {
+              changed = true;
+              return {
+                ...t,
+                title: state.nomePrograma || 'Novo Espelho',
+                programState: state,
+                cloudDocId: activeCloudDocId
+              };
+            }
+          }
+        }
+        return t;
+      });
+      return changed ? next : prev;
+    });
+  }, [state, activeCloudDocId, activeTabId]);
+
   // Automatic cloud saving & synchronizing for the active espelho/roteiro (programs collection)
   useEffect(() => {
     const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
     if (!isCloudUser) return;
-    if (!activeCloudDocId) return; // Only auto-save if we have an active, manually saved or loaded cloud document!
     if (!state.nomePrograma || !state.nomePrograma.trim()) return;
+    if (!activeCloudDocId) return; // Only auto-save existing cloud documents, do not auto-create empty drafts
+
+    // Check if there are actually changes compared to the last saved baseState
+    const isDirty = !baseStateRef.current || 
+      state.nomePrograma !== baseStateRef.current.nomePrograma ||
+      state.editorChefe !== baseStateRef.current.editorChefe ||
+      state.tempoPrograma !== baseStateRef.current.tempoPrograma ||
+      state.dataPrograma !== baseStateRef.current.dataPrograma ||
+      JSON.stringify(state.blocos) !== JSON.stringify(baseStateRef.current.blocos);
+
+    // If there are no changes, no need to auto-save!
+    if (!isDirty) return;
+
+    // If the program name is changed compared to the originally loaded program name, do NOT auto-save
+    // to prevent overwriting the old program in the cloud!
+    const isNameChanged = activeCloudDocId && baseStateRef.current && state.nomePrograma.trim().toLowerCase() !== baseStateRef.current.nomePrograma.trim().toLowerCase();
+    if (isNameChanged) {
+      return;
+    }
 
     const handler = setTimeout(async () => {
       try {
@@ -736,17 +1162,112 @@ export default function App() {
           updatedAt: new Date()
         };
 
-        const docRef = doc(db, 'programs', activeCloudDocId);
-        await updateDoc(docRef, payload);
-        baseStateRef.current = {
-          nomePrograma: state.nomePrograma,
-          editorChefe: state.editorChefe || '',
-          tempoPrograma: state.tempoPrograma,
-          dataPrograma: state.dataPrograma || '',
-          blocos: state.blocos
-        };
-        setAutoSaveStatus('saved');
-        setTimeout(() => setAutoSaveStatus('idle'), 2500);
+        if (activeCloudDocId) {
+          const docRef = doc(db, 'programs', activeCloudDocId);
+          try {
+            await updateDoc(docRef, payload);
+            baseStateRef.current = {
+              nomePrograma: state.nomePrograma,
+              editorChefe: state.editorChefe || '',
+              tempoPrograma: state.tempoPrograma,
+              dataPrograma: state.dataPrograma || '',
+              blocos: state.blocos
+            };
+            
+            // Mark tab as synced
+            setOpenedTabs(prev => prev.map(t => {
+              if (t.id === `roteiro-${activeCloudDocId}`) {
+                return { ...t, hasUnsavedChanges: false };
+              }
+              return t;
+            }));
+
+            setAutoSaveStatus('saved');
+            setTimeout(() => setAutoSaveStatus('idle'), 2500);
+          } catch (updateErr: any) {
+            // Check if document was deleted or does not exist
+            const isNotFound = updateErr && (
+              updateErr.code === 'not-found' || 
+              String(updateErr.message || '').includes('No document to update') ||
+              String(updateErr.message || '').includes('not-found')
+            );
+            
+            if (isNotFound) {
+              console.warn('Document did not exist in cloud during auto-save. Re-creating...');
+              const newDocRef = await addDoc(collection(db, 'programs'), payload);
+              const newCloudId = newDocRef.id;
+              
+              baseStateRef.current = {
+                nomePrograma: state.nomePrograma,
+                editorChefe: state.editorChefe || '',
+                tempoPrograma: state.tempoPrograma,
+                dataPrograma: state.dataPrograma || '',
+                blocos: state.blocos
+              };
+
+              sessionStorage.setItem('rede_tvi_active_cloud_doc_id', newCloudId);
+              setActiveCloudDocId(newCloudId);
+
+              // Find current active tab and update its ID to match the new doc ID
+              if (activeTabId !== 'espelhos') {
+                setOpenedTabs(prev => prev.map(t => {
+                  if (t.id === activeTabId || t.id === `roteiro-${activeCloudDocId}`) {
+                    return {
+                      ...t,
+                      id: `roteiro-${newCloudId}`,
+                      cloudDocId: newCloudId,
+                      title: state.nomePrograma,
+                      hasUnsavedChanges: false
+                    };
+                  }
+                  return t;
+                }));
+                setActiveTabId(`roteiro-${newCloudId}`);
+              }
+              
+              setAutoSaveStatus('saved');
+              setTimeout(() => setAutoSaveStatus('idle'), 2500);
+              setCloudRefreshTrigger(prev => prev + 1);
+            } else {
+              throw updateErr;
+            }
+          }
+        } else {
+          // Automatically create a new document in the cloud
+          const docRef = await addDoc(collection(db, 'programs'), payload);
+          const newCloudId = docRef.id;
+          
+          baseStateRef.current = {
+            nomePrograma: state.nomePrograma,
+            editorChefe: state.editorChefe || '',
+            tempoPrograma: state.tempoPrograma,
+            dataPrograma: state.dataPrograma || '',
+            blocos: state.blocos
+          };
+
+          sessionStorage.setItem('rede_tvi_active_cloud_doc_id', newCloudId);
+          setActiveCloudDocId(newCloudId);
+
+          // Find current active tab and update its ID to match the new doc ID
+          if (activeTabId !== 'espelhos') {
+            setOpenedTabs(prev => prev.map(t => {
+              if (t.id === activeTabId) {
+                return {
+                  ...t,
+                  id: `roteiro-${newCloudId}`,
+                  cloudDocId: newCloudId,
+                  title: state.nomePrograma,
+                  hasUnsavedChanges: false
+                };
+              }
+              return t;
+            }));
+            setActiveTabId(`roteiro-${newCloudId}`);
+          }
+          
+          setAutoSaveStatus('saved');
+          setTimeout(() => setAutoSaveStatus('idle'), 2500);
+        }
       } catch (err) {
         console.error('Error during auto-saving espelho:', err);
         setAutoSaveStatus('error');
@@ -754,7 +1275,7 @@ export default function App() {
     }, 1500); // Debounce duration
 
     return () => clearTimeout(handler);
-  }, [state, activeCloudDocId, currentUser]);
+  }, [state, activeCloudDocId, currentUser, activeTabId]);
 
   // Calculations for used time, remaining time, and blocks' specific times
   const parsedTempoPrograma = parseHHMMSSToSeconds(state.tempoPrograma);
@@ -923,15 +1444,68 @@ export default function App() {
     logSystemAction('delete_lauda', `Excluiu a lauda '${laudaName}' do '${blockTitle}'`);
   };
 
+  const saveLaudaVersion = async (
+    laudaId: string,
+    materia: string,
+    content: string,
+    gc: string
+  ) => {
+    const versionData = {
+      laudaId,
+      materia,
+      laudaContent: content,
+      gc,
+      updatedBy: currentUser?.email || 'editor.offline@redetvi.com',
+      updatedAt: new Date().toISOString(),
+    };
+
+    try {
+      const localKey = `lauda_versions_${laudaId}`;
+      const localVersionsStr = localStorage.getItem(localKey);
+      const localVersions = localVersionsStr ? JSON.parse(localVersionsStr) : [];
+      const updatedVersions = [versionData, ...localVersions].slice(0, 50);
+      localStorage.setItem(localKey, JSON.stringify(updatedVersions));
+    } catch (err) {
+      console.error('Erro ao salvar versão local da lauda:', err);
+    }
+
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
+    if (isCloudUser) {
+      try {
+        await addDoc(collection(db, 'lauda_versions'), versionData);
+      } catch (err) {
+        console.error('Erro ao salvar versão da lauda na nuvem:', err);
+      }
+    }
+  };
+
   const handleUpdateLauda = (blockId: string, laudaId: string, fields: Partial<Lauda>) => {
     const block = state.blocos.find(b => b.id === blockId);
     const lauda = block?.laudas.find(l => l.id === laudaId);
     const laudaName = fields.materia || lauda?.materia || 'Sem retranca';
     const blockTitle = block?.titulo || 'Bloco';
 
+    const isContentChanged = fields.laudaContent !== undefined && fields.laudaContent !== (lauda?.laudaContent || '');
+    const isGcChanged = fields.gc !== undefined && fields.gc !== (lauda?.gc || '');
+
+    if (isContentChanged || isGcChanged) {
+      const finalContent = fields.laudaContent !== undefined ? fields.laudaContent : (lauda?.laudaContent || '');
+      const finalGc = fields.gc !== undefined ? fields.gc : (lauda?.gc || '');
+      saveLaudaVersion(laudaId, laudaName, finalContent, finalGc);
+    }
+
     if (fields.aprovado !== undefined) {
       const txt = fields.aprovado ? 'Aprovou' : 'Desmarcou aprovação da';
       logSystemAction('approve_lauda', `${txt} lauda '${laudaName}' do '${blockTitle}'`);
+    }
+
+    if (fields.materia !== undefined) {
+      setOpenedTabs(prev => prev.map(t => {
+        if (t.id === `lauda-${laudaId}`) {
+          return { ...t, title: fields.materia || 'Sem Retranca', materiaTitle: fields.materia || 'Sem Retranca' };
+        }
+        return t;
+      }));
     }
 
     setState(prev => ({
@@ -1083,6 +1657,212 @@ export default function App() {
     URL.revokeObjectURL(blobUrl);
   };
 
+  // EXPORT VIDEO PLAYOUT SEQUENCE JSON FILE
+  const handleExportVideoSequence = () => {
+    const videosList: { ordem: number; arquivo: string }[] = [];
+    let orderCounter = 1;
+
+    state.blocos.forEach(block => {
+      block.laudas.forEach(lauda => {
+        if (lauda.driveLink && lauda.driveLink.trim() !== '') {
+          let fileName = '';
+
+          if (lauda.videoFileName && lauda.videoFileName.trim() !== '') {
+            fileName = lauda.videoFileName.trim();
+          } else if (lauda.driveLink.startsWith('local://')) {
+            fileName = lauda.driveLink.replace('local://', '');
+          } else {
+            // Attempt to infer from URL
+            const urlParts = lauda.driveLink.split('/');
+            const lastPart = urlParts[urlParts.length - 1]?.split('?')[0] || '';
+            const isVideoExt = /\.(mp4|avi|mov|mkv|flv|webm|m4v|3gp)$/i.test(lastPart);
+            if (lastPart && isVideoExt) {
+              fileName = lastPart;
+            } else {
+              // Fallback to lauda.materia + .mp4
+              const cleanMateria = lauda.materia
+                .trim()
+                .toLowerCase()
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '') // remove accents
+                .replace(/[^a-z0-9\s-_]/g, '')
+                .replace(/\s+/g, '_');
+              fileName = `${cleanMateria || 'video'}.mp4`;
+            }
+          }
+
+          videosList.push({
+            ordem: orderCounter,
+            arquivo: fileName
+          });
+          orderCounter++;
+        }
+      });
+    });
+
+    let formattedExhibitionDate = '';
+    if (state.dataPrograma) {
+      const parts = state.dataPrograma.split('-');
+      if (parts.length === 3) {
+        formattedExhibitionDate = `${parts[2]}/${parts[1]}/${parts[0]}`; // DD/MM/YYYY
+      } else {
+        formattedExhibitionDate = state.dataPrograma;
+      }
+    } else {
+      const d = new Date();
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const yyyy = d.getFullYear();
+      formattedExhibitionDate = `${dd}/${mm}/${yyyy}`;
+    }
+
+    const exportStructure = {
+      version: "1.0",
+      programa: state.nomePrograma || "PROGRAMA",
+      data_exibicao: formattedExhibitionDate,
+      editor_chefe: state.editorChefe || "",
+      espelho_id: activeCloudDocId || "",
+      videos: videosList
+    };
+
+    let dateSuffix = '';
+    if (state.dataPrograma) {
+      const parts = state.dataPrograma.split('-');
+      if (parts.length === 3) {
+        dateSuffix = `${parts[2]}-${parts[1]}-${parts[0]}`;
+      } else {
+        dateSuffix = state.dataPrograma.replace(/[^a-z0-9]/gi, '_');
+      }
+    } else {
+      const d = new Date();
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const yyyy = d.getFullYear();
+      dateSuffix = `${dd}-${mm}-${yyyy}`;
+    }
+
+    let programClean = state.nomePrograma.trim();
+    if (!programClean) {
+      programClean = 'PROGRAMA';
+    } else {
+      programClean = programClean.replace(/[^a-z0-9]/gi, '_').toUpperCase();
+    }
+
+    const exportFilename = `${programClean}_${dateSuffix}.json`;
+
+    const dataBlob = new Blob([JSON.stringify(exportStructure, null, 2)], { type: 'application/json' });
+    const blobUrl = URL.createObjectURL(dataBlob);
+
+    const aTag = document.createElement('a');
+    aTag.href = blobUrl;
+    aTag.download = exportFilename;
+    aTag.click();
+    URL.revokeObjectURL(blobUrl);
+  };
+
+  // SAVE TO FIRESTORE CLOUD DATABASE
+  const handleSaveToCloud = async () => {
+    if (!currentUser) {
+      alert("Você precisa estar logado para salvar na nuvem! Use o menu do topo para fazer login.");
+      return;
+    }
+    if (!state.nomePrograma || !state.nomePrograma.trim()) {
+      alert("Defina um nome para o programa antes de salvar na nuvem!");
+      return;
+    }
+
+    setIsSavingToCloud(true);
+    setSaveToCloudSuccess(false);
+
+    try {
+      const payload = {
+        userId: currentUser.uid,
+        userEmail: currentUser.email || 'offline-editor@redetvi.com',
+        nomePrograma: state.nomePrograma.trim(),
+        editorChefe: state.editorChefe || '',
+        tempoPrograma: state.tempoPrograma,
+        dataPrograma: state.dataPrograma || '',
+        blocos: state.blocos,
+        updatedAt: new Date()
+      };
+
+      let savedId = activeCloudDocId;
+
+      if (activeCloudDocId) {
+        // Edit Mode: directly update the document by unique ID to prevent duplication
+        const docRef = doc(db, 'programs', activeCloudDocId);
+        await updateDoc(docRef, payload);
+
+        baseStateRef.current = {
+          nomePrograma: state.nomePrograma,
+          editorChefe: state.editorChefe || '',
+          tempoPrograma: state.tempoPrograma,
+          dataPrograma: state.dataPrograma || '',
+          blocos: state.blocos
+        };
+
+        // Update active tab metadata
+        if (activeTabId !== 'espelhos') {
+          setOpenedTabs(prev => prev.map(t => {
+            if (t.id === activeTabId) {
+              return {
+                ...t,
+                title: state.nomePrograma || 'Sem Título',
+                programState: { ...state },
+                cloudDocId: activeCloudDocId,
+                hasUnsavedChanges: false
+              };
+            }
+            return t;
+          }));
+        }
+      } else {
+        // Create Mode: check if a program with the same name already exists
+        const q = query(
+          collection(db, 'programs'),
+          where('nomePrograma', '==', state.nomePrograma.trim())
+        );
+        const querySnapshot = await getDocs(q);
+
+        if (!querySnapshot.empty) {
+          const confirmOverwrite = window.confirm(`Já existe um roteiro de "${state.nomePrograma.trim()}" salvo na nuvem. Deseja sobrescrevê-lo?\n\nClique em OK para sobrescrever ou Cancelar para alterar o nome do programa.`);
+          if (!confirmOverwrite) {
+            setIsSavingToCloud(false);
+            return;
+          }
+          const existingDoc = querySnapshot.docs[0];
+          const docRef = doc(db, 'programs', existingDoc.id);
+          await updateDoc(docRef, payload);
+          savedId = existingDoc.id;
+        } else {
+          // Create a brand new document
+          const docRef = await addDoc(collection(db, 'programs'), payload);
+          savedId = docRef.id;
+        }
+
+        // Fulfill "Limpar o cabeçalho após criar um novo espelho"
+        setState(initialProgramState);
+        setActiveCloudDocId(null);
+        baseStateRef.current = null;
+
+        // If they saved from a dynamic tab, return to the master Espelhos tab
+        if (activeTabId !== 'espelhos') {
+          setOpenedTabs(prev => prev.filter(t => t.id !== activeTabId));
+          setActiveTabId('espelhos');
+        }
+      }
+
+      setSaveToCloudSuccess(true);
+      setCloudRefreshTrigger(prev => prev + 1);
+      setTimeout(() => setSaveToCloudSuccess(false), 3000);
+    } catch (err: any) {
+      console.error('Error saving to cloud:', err);
+      alert(`Erro ao salvar na nuvem: ${err.message || err}`);
+    } finally {
+      setIsSavingToCloud(false);
+    }
+  };
+
   // TRIGGER LOAD FILE
   const handleCarregar = () => {
     fileInputRef.current?.click();
@@ -1097,6 +1877,15 @@ export default function App() {
     }
     setState(initialProgramState);
     setActiveCloudDocId(null);
+    setOpenedTabs([{ id: 'espelhos', type: 'espelhos', title: 'Espelhos' }]);
+    setActiveTabId('espelhos');
+  };
+
+  // UNLINK PROGRAM FROM CURRENT CLOUD DOCUMENT (SAVE AS NEW COPIED RUNDOWN)
+  const handleUnlinkCloudDoc = () => {
+    setActiveCloudDocId(null);
+    sessionStorage.removeItem('rede_tvi_active_cloud_doc_id');
+    baseStateRef.current = null;
   };
 
   // TRIGGER PRINT RUNDOWN
@@ -1233,7 +2022,7 @@ export default function App() {
     );
   }
 
-  const isAdmin = currentUser?.email?.toLowerCase() === 'weverton.alvesdevetor@gmail.com';
+  const isAdmin = isUserAdmin(currentUser?.email);
 
   return (
     <div className="min-h-screen bg-[#0b0b0d] flex flex-col">
@@ -1259,7 +2048,10 @@ export default function App() {
                 { key: 'espelhos', label: 'Espelhos (Roteiro)', icon: Sliders, desc: 'Grade dos telejornais' },
                 { key: 'agendas', label: 'Agendas', icon: Calendar, desc: 'Escalas e compromissos' },
                 { key: 'teleprompter', label: 'Teleprompter', icon: Presentation, desc: 'Controles e leitura' },
-                ...(isAdmin ? [{ key: 'colaboradores', label: 'Colaboradores', icon: Users, desc: 'Cadastro de profissionais' }] : []),
+                ...(isAdmin ? [
+                  { key: 'programas', label: 'Programas', icon: Tv, desc: 'Cadastro de telejornais' },
+                  { key: 'colaboradores', label: 'Colaboradores', icon: Users, desc: 'Cadastro de profissionais' }
+                ] : []),
                 { key: 'materiais_brutos', label: 'Materiais Brutos', icon: Folder, desc: 'Apoio, imagens e vídeos brutos' },
               ].map((tab) => {
                 const isActive = activeTab === tab.key;
@@ -1267,7 +2059,9 @@ export default function App() {
                 return (
                   <button
                     key={tab.key}
-                    onClick={() => setActiveTab(tab.key)}
+                    onClick={() => {
+                      setActiveTab(tab.key);
+                    }}
                     className={`w-full flex items-start gap-3.5 px-4 py-3 rounded-xl tracking-wide transition-all cursor-pointer text-left ${
                       isActive
                         ? 'bg-amber-500 text-zinc-950 font-extrabold shadow-lg shadow-amber-500/10 scale-102'
@@ -1286,6 +2080,36 @@ export default function App() {
               })}
             </nav>
           </div>
+
+          {/* Sidebar Active Users presence widget */}
+          <div className="mt-auto pt-4 border-t border-zinc-900">
+            <div className="flex items-center gap-2 mb-2.5 px-1">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-450 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-550">
+                Equipe Online ({onlineUsers.length})
+              </span>
+            </div>
+            <div className="space-y-2 max-h-[140px] overflow-y-auto scrollbar-thin pr-1">
+              {onlineUsers.map(u => (
+                <div key={u.id || u.userId} className="flex items-start gap-2.5 px-2.5 py-2 rounded-xl bg-[#0e0e11]/45 border border-zinc-900/80 text-left">
+                  <div className="w-5.5 h-5.5 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
+                    <span className="text-[9px] font-sans font-black text-amber-500">
+                      {((u.userName || u.userEmail || '?').charAt(0)).toUpperCase()}
+                    </span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-bold text-zinc-350 leading-none truncate">{u.userName}</p>
+                    <span className="text-[9px] font-sans text-amber-500/85 block mt-1 truncate leading-none">
+                      • {u.location || 'Navegando'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </aside>
 
         {/* RIGHT SIDE AREA (Header and dynamic tabs content) */}
@@ -1298,10 +2122,12 @@ export default function App() {
             googleToken={googleToken}
             onGoogleConnect={handleGoogleConnect}
             onGoogleDisconnect={handleGoogleDisconnect}
+            theme={theme}
+            onToggleTheme={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
           />
 
           {/* Mobile Navigation Bar */}
-          <div className="lg:hidden border-b border-zinc-850 bg-[#0d0d0f] p-2 flex gap-1.5 justify-around text-[10px] font-bold font-mono tracking-wider uppercase overflow-x-auto scrollbar-none no-print select-none">
+          <div className="lg:hidden border-b border-zinc-850 bg-[#0d0d0f] p-2 flex flex-wrap gap-1.5 justify-center text-[10px] font-bold font-mono tracking-wider uppercase no-print select-none">
             {[
               { key: 'inicio', label: 'Início' },
               { key: 'pautas', label: 'Pautas' },
@@ -1309,14 +2135,19 @@ export default function App() {
               { key: 'espelhos', label: 'Espelhos' },
               { key: 'agendas', label: 'Agendas' },
               { key: 'teleprompter', label: 'Prompter' },
-              ...(isAdmin ? [{ key: 'colaboradores', label: 'Equipe' }] : []),
+              ...(isAdmin ? [
+                { key: 'programas', label: 'PGMs' },
+                { key: 'colaboradores', label: 'Equipe' }
+              ] : []),
               { key: 'materiais_brutos', label: 'Brutos' }
             ].map((tab) => {
               const isActive = activeTab === tab.key;
               return (
                 <button
                   key={tab.key}
-                  onClick={() => setActiveTab(tab.key)}
+                  onClick={() => {
+                    setActiveTab(tab.key);
+                  }}
                   className={`px-3 py-2 rounded-lg transition-all cursor-pointer shrink-0 ${
                     isActive ? 'bg-amber-500 text-zinc-950 font-extrabold shadow-md' : 'text-zinc-400 hover:text-zinc-200'
                   }`}
@@ -1328,7 +2159,7 @@ export default function App() {
           </div>
 
           {/* Dynamic Panel Content loaded inside responsive wrappers */}
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-6 py-6 pb-20 bg-black" style={{ backgroundColor: '#000000' }}>
+          <main className="flex-1 w-full px-4 md:px-8 lg:px-10 py-6 pb-20 bg-black" style={{ backgroundColor: '#000000' }}>
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeTab}
@@ -1512,16 +2343,16 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* General System Logs / Alterações em tempo real panel */}
-                    <div className="w-full">
+                    {/* Real-time Dashboard Grid: Logs & Presence Panel */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
                       
-                      {/* Right: Activity Stream (Histórico) */}
-                      <div className="p-6 rounded-2xl border border-zinc-850 bg-[#0a0a0c]/50 flex flex-col h-[400px] w-full">
+                      {/* Left: Activity Stream (Histórico) - Spans 2 Columns */}
+                      <div className="lg:col-span-2 p-6 rounded-2xl border border-zinc-850 bg-[#0a0a0c]/50 flex flex-col h-[400px] w-full">
                         <div className="flex items-center justify-between border-b border-zinc-850 pb-3.5 mb-3.5 shrink-0">
                           <div className="flex items-center gap-2.5">
                             <span className="relative flex h-2 w-2">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
                             </span>
                             <div className="text-left">
                               <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-200 font-mono">
@@ -1609,12 +2440,12 @@ export default function App() {
                                       <strong className="text-zinc-150 font-bold capitalize">{displayName}</strong> {log.detalhes}
                                     </p>
                                     {log.programaNome && (
-                                      <span className="text-[10px] text-zinc-500 font-mono block">
+                                      <span className="text-[10px] text-zinc-550 font-mono block">
                                         Programa: {log.programaNome}
                                       </span>
                                     )}
                                   </div>
-                                  <div className="text-[10px] font-mono text-zinc-500 whitespace-nowrap pt-0.5 select-none">
+                                  <div className="text-[10px] font-mono text-zinc-550 whitespace-nowrap pt-0.5 select-none">
                                     {formatLogTime(log.createdAt)}
                                   </div>
                                 </div>
@@ -1622,8 +2453,94 @@ export default function App() {
                             })
                           )}
                         </div>
-
                       </div>
+
+                      {/* Right: Active Users Presence - Spans 1 Column */}
+                      <div className="p-6 rounded-2xl border border-zinc-850 bg-[#0a0a0c]/50 flex flex-col h-[400px] w-full text-left">
+                        <div className="flex items-center justify-between border-b border-zinc-850 pb-3.5 mb-3.5 shrink-0">
+                          <div className="flex items-center gap-2.5">
+                            <span className="relative flex h-2.5 w-2.5">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                            </span>
+                            <div>
+                              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-200 font-mono">
+                                Usuários Online
+                              </h4>
+                              <p className="text-[10px] text-zinc-550 font-sans mt-0.5">
+                                Quem está conectado e onde está agora.
+                              </p>
+                            </div>
+                          </div>
+                          <span className="text-[9px] font-mono font-bold uppercase text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded">
+                            {onlineUsers.length} online
+                          </span>
+                        </div>
+
+                        {/* Presence body container */}
+                        <div className="flex-1 overflow-y-auto pr-1 space-y-3.5 scrollbar-thin">
+                          {onlineUsers.length === 0 ? (
+                            <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-2.5">
+                              <div className="w-10 h-10 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-600">
+                                <Users className="w-5 h-5" />
+                              </div>
+                              <div>
+                                <h5 className="text-xs font-bold text-zinc-350">Nenhum Usuário Conectado</h5>
+                                <p className="text-[11px] text-zinc-550 max-w-xs mt-1">
+                                  Houve um problema de conexão ou nenhum usuário foi encontrado ativo.
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            onlineUsers.map((u) => {
+                              const emailLower = (u.userEmail || '').toLowerCase().trim();
+                              const colab = colaboradores.find(c => c.emailAcesso?.toLowerCase().trim() === emailLower);
+                              const role = colab?.funcao || 'Operador';
+                              const isMe = u.userId === currentUser.uid;
+
+                              return (
+                                <div
+                                  key={u.id || u.userId}
+                                  className="p-3 rounded-xl border border-zinc-850/60 bg-zinc-950/20 flex items-start gap-3 text-left transition-all hover:bg-zinc-950/40 hover:border-zinc-800"
+                                >
+                                  {/* Avatar circle */}
+                                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-zinc-850 to-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0 shadow-inner relative">
+                                    <span className="text-xs font-sans font-black text-amber-500">
+                                      {((u.userName || u.userEmail || '?').charAt(0)).toUpperCase()}
+                                    </span>
+                                    <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border border-zinc-950 rounded-full"></span>
+                                  </div>
+
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-1.5">
+                                      <h5 className="text-xs font-extrabold text-zinc-200 truncate">
+                                        {u.userName}
+                                      </h5>
+                                      {isMe && (
+                                        <span className="text-[8px] font-mono bg-zinc-800 text-zinc-400 border border-zinc-700 px-1.5 py-0.2 rounded font-semibold leading-none scale-90">
+                                          Você
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-[10px] text-zinc-550 font-sans mt-0.5 font-semibold">
+                                      {role} • {u.userEmail}
+                                    </p>
+                                    
+                                    {/* Location indicator */}
+                                    <div className="flex items-center gap-1.5 mt-2 bg-[#0d0d10]/80 border border-zinc-900/60 rounded-lg px-2.5 py-1.5">
+                                      <Activity className="w-3 h-3 text-amber-500 shrink-0" />
+                                      <span className="text-[9px] font-medium font-sans text-amber-500/90 truncate leading-none">
+                                        {u.location || 'Navegando'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+
                     </div>
 
                   </div>
@@ -1633,6 +2550,14 @@ export default function App() {
                 {activeTab === 'reportagens' && <ReportagensTab currentUser={currentUser} colaboradores={colaboradores} registeredPrograms={registeredPrograms} />}
                 {activeTab === 'agendas' && <AgendasTab currentUser={currentUser} />}
                 {activeTab === 'colaboradores' && <ColaboradoresTab currentUser={currentUser} />}
+                {activeTab === 'programas' && (
+                  <ProgramasTab
+                    currentUser={currentUser}
+                    registeredPrograms={registeredPrograms}
+                    onAddRegisteredProgram={handleAddRegisteredProgram}
+                    onDeleteRegisteredProgram={handleDeleteRegisteredProgram}
+                  />
+                )}
                 {activeTab === 'materiais_brutos' && <MateriaisBrutosTab currentUser={currentUser} />}
 
                 {activeTab === 'teleprompter' && (
@@ -1659,187 +2584,417 @@ export default function App() {
                 )}
 
                 {activeTab === 'espelhos' && (
-                  <>
-                    {/* Google Drive Connection Alert Banner */}
-                    {!googleToken && (
-                      <div className="mb-6 mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 no-print">
-                        <div className="p-4 rounded-2xl border border-amber-500/10 bg-amber-500/5 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                          <div className="flex items-center gap-3 text-left">
-                            <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 shrink-0">
-                              <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
-                                <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" />
-                              </svg>
-                            </div>
-                            <div>
-                              <h4 className="text-sm font-bold text-amber-500 font-display uppercase tracking-wider">Vincule sua Conta Google</h4>
-                              <p className="text-zinc-400 text-xs mt-0.5 max-w-2xl leading-relaxed">
-                                Para que todos os membros da equipe vejam, baixem e utilizem as mídias e vídeos anexados nas laudas do telejornal em tempo real, conecte sua conta Google de forma segura.
-                              </p>
+                  <div className="space-y-4">
+                    {/* BROWSER-STYLE TAB BAR */}
+                    <div className="flex items-center border-b border-zinc-850 bg-zinc-950/40 p-1 rounded-t-2xl overflow-x-auto scrollbar-none gap-1 no-print">
+                      {openedTabs.map((tab) => {
+                        const isSelected = activeTabId === tab.id;
+
+                        // Calculate if this Roteiro tab has unsaved changes compared to the cloud
+                        let hasUnsaved = tab.hasUnsavedChanges;
+                        if (tab.type === 'roteiro' && isSelected) {
+                          hasUnsaved = !baseStateRef.current || 
+                            state.nomePrograma !== baseStateRef.current.nomePrograma ||
+                            state.editorChefe !== baseStateRef.current.editorChefe ||
+                            state.tempoPrograma !== baseStateRef.current.tempoPrograma ||
+                            state.dataPrograma !== baseStateRef.current.dataPrograma ||
+                            JSON.stringify(state.blocos) !== JSON.stringify(baseStateRef.current.blocos);
+                        }
+
+                        return (
+                          <div
+                            key={tab.id}
+                            onClick={() => handleSelectTab(tab.id)}
+                            className={`group relative flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-t-xl transition-all duration-150 cursor-pointer border-t border-x ${
+                              isSelected
+                                ? 'bg-[#18181b] text-amber-500 border-zinc-800 border-b-2 border-b-amber-500'
+                                : 'bg-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/40 border-transparent'
+                            }`}
+                          >
+                            {tab.type === 'espelhos' ? (
+                              <Sliders className="w-4 h-4 text-amber-500/85" />
+                            ) : tab.type === 'roteiro' ? (
+                              <Folder className="w-4 h-4 text-zinc-405" />
+                            ) : tab.type === 'programas' ? (
+                              <Tv className="w-4 h-4 text-amber-500/85" strokeWidth={2} />
+                            ) : (
+                              <FileText className="w-4 h-4 text-zinc-500" />
+                            )}
+                            <span className="truncate max-w-[150px] uppercase font-sans tracking-wide">
+                              {tab.type === 'espelhos' ? 'Espelhos' : 
+                               tab.type === 'roteiro' ? tab.title : 
+                               tab.type === 'programas' ? 'Programas' : 
+                               `Lauda: ${tab.title}`}
+                            </span>
+
+                            {tab.type === 'roteiro' && hasUnsaved && (
+                              <span 
+                                className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse shrink-0" 
+                                title="Alterações não sincronizadas"
+                              />
+                            )}
+                            
+                            {/* Close Tab Icon Button */}
+                            {tab.type !== 'espelhos' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleCloseTab(tab.id);
+                                }}
+                                className="p-0.5 rounded-md hover:bg-zinc-800 text-zinc-500 hover:text-red-400 transition-colors"
+                                title="Fechar aba"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {activeTabId === 'espelhos' ? (
+                      <div className="space-y-6">
+                        {/* Google Drive Connection Banner */}
+                        {!googleToken && (
+                          <div className="mb-2 w-full no-print">
+                            <div className="p-4 rounded-2xl border border-amber-500/10 bg-amber-500/5 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                              <div className="flex items-center gap-3 text-left">
+                                <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 shrink-0">
+                                  <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
+                                    <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" />
+                                  </svg>
+                                </div>
+                                <div>
+                                  <h4 className="text-sm font-bold text-amber-500 font-display uppercase tracking-wider">Vincule sua Conta Google</h4>
+                                  <p className="text-zinc-400 text-xs mt-0.5 max-w-2xl leading-relaxed">
+                                    Para que todos os membros da equipe vejam, baixem e utilizem as mídias e vídeos anexados nas laudas do telejornal em tempo real, conecte sua conta Google de forma segura.
+                                  </p>
+                                </div>
+                              </div>
+                              <button
+                                onClick={handleGoogleConnect}
+                                className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-extrabold text-xs uppercase tracking-wider rounded-lg transition-all active:scale-95 duration-100 cursor-pointer flex items-center gap-1.5 shadow-md shrink-0 select-none"
+                              >
+                                <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                                  <path d="M23.49,12.27c0-0.81-0.07-1.59-0.2-2.35H12v4.51h6.44c-0.28,1.47-1.11,2.71-2.36,3.55v2.95h3.82C22.13,18.89,23.49,15.86,23.49,12.27z" />
+                                </svg>
+                                Conectar Agora
+                              </button>
                             </div>
                           </div>
-                          <button
-                            onClick={handleGoogleConnect}
-                            className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-extrabold text-xs uppercase tracking-wider rounded-lg transition-all active:scale-95 duration-100 cursor-pointer flex items-center gap-1.5 shadow-md shrink-0 select-none"
-                          >
-                            <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
-                              <path d="M23.49,12.27c0-0.81-0.07-1.59-0.2-2.35H12v4.51h6.44c-0.28,1.47-1.11,2.71-2.36,3.55v2.95h3.82C22.13,18.89,23.49,15.86,23.49,12.27z" />
-                            </svg>
-                            Conectar Agora
-                          </button>
+                        )}
+
+                        {/* 1. ProgramInfo in FORM mode */}
+                        <ProgramInfo
+                          nomePrograma={state.nomePrograma}
+                          setNomePrograma={(v) => setState(prev => ({ ...prev, nomePrograma: v }))}
+                          editorChefe={state.editorChefe || ''}
+                          setEditorChefe={(v) => setState(prev => ({ ...prev, editorChefe: v }))}
+                          tempoPrograma={state.tempoPrograma}
+                          setTempoPrograma={(v) => setState(prev => ({ ...prev, tempoPrograma: v }))}
+                          dataPrograma={state.dataPrograma || ''}
+                          setDataPrograma={(v) => setState(prev => ({ ...prev, dataPrograma: v }))}
+                          tempoTotal={tempoTotalLabel}
+                          tempoUsado={tempoUsadoLabel}
+                          tempoRestante={tempoRestanteLabel}
+                          isExtrapolado={isExtrapolated}
+                          onAddBloco={handleAddBloco}
+                          onAddComercial={handleAddComercial}
+                          onImprimir={handleImprimir}
+                          onSalvar={handleSalvar}
+                          onCarregar={handleCarregar}
+                          onExportVideoSequence={handleExportVideoSequence}
+                          onClearProgram={handleClearProgram}
+                          fileInputRef={fileInputRef}
+                          registeredPrograms={registeredPrograms}
+                          onAddRegisteredProgram={handleAddRegisteredProgram}
+                          onDeleteRegisteredProgram={handleDeleteRegisteredProgram}
+                          showMode="form"
+                          onOpenProgramasTab={isAdmin ? handleOpenProgramasTab : undefined}
+                          onSaveToCloud={handleSaveToCloud}
+                          isSavingToCloud={isSavingToCloud}
+                          saveToCloudSuccess={saveToCloudSuccess}
+                          activeCloudDocId={activeCloudDocId}
+                          onUnlinkCloudDoc={handleUnlinkCloudDoc}
+                          originalNomePrograma={baseStateRef.current?.nomePrograma}
+                          onOpenRoteiroTab={handleOpenRoteiroTab}
+                        />
+
+                        {/* 2. CloudSyncPanel for listing and loading other saved programs */}
+                        <div className="pt-8 border-t border-zinc-850/60">
+                          <CloudSyncPanel
+                            currentProgramState={state}
+                            onLoadProgram={async (savedState, cloudId) => {
+                              if (cloudId) {
+                                try {
+                                  const freshDoc = await getDoc(doc(db, 'programs', cloudId));
+                                  if (freshDoc.exists()) {
+                                    const d = freshDoc.data();
+                                    const loaded: ProgramState = {
+                                      nomePrograma: d.nomePrograma || '',
+                                      editorChefe: d.editorChefe || '',
+                                      tempoPrograma: d.tempoPrograma || '00:00:00',
+                                      dataPrograma: d.dataPrograma || '',
+                                      blocos: (d.blocos || []).map((b: any) => ({
+                                        ...b,
+                                        laudas: (b.laudas || []).map((l: any) => ({
+                                          ...l,
+                                          gc: l.gc || '',
+                                          gcs: l.gcs || [],
+                                          aprovado: !!l.aprovado
+                                        }))
+                                      }))
+                                    };
+                                    
+                                    // Load directly inside the main workspace!
+                                    setState(loaded);
+                                    baseStateRef.current = loaded;
+                                    setActiveCloudDocId(cloudId);
+                                    
+                                    // Open as tab!
+                                    const tabId = `roteiro-${cloudId}`;
+                                    const tabTitle = loaded.nomePrograma || 'Sem Título';
+                                    setOpenedTabs(prev => {
+                                      const exists = prev.some(t => t.id === tabId);
+                                      if (!exists) {
+                                        return [
+                                          ...prev,
+                                          {
+                                            id: tabId,
+                                            type: 'roteiro',
+                                            title: tabTitle,
+                                            programState: loaded,
+                                            cloudDocId: cloudId,
+                                            hasUnsavedChanges: false
+                                          }
+                                        ];
+                                      }
+                                      return prev.map(t => t.id === tabId ? { ...t, title: tabTitle, programState: loaded, cloudDocId: cloudId } : t);
+                                    });
+                                    setActiveTabId(tabId);
+                                  } else {
+                                    setState(savedState);
+                                    baseStateRef.current = savedState;
+                                    setActiveCloudDocId(cloudId);
+                                    
+                                    // Open default fallback tab
+                                    const tabId = `roteiro-${cloudId}`;
+                                    const tabTitle = savedState.nomePrograma || 'Sem Título';
+                                    setOpenedTabs(prev => {
+                                      const exists = prev.some(t => t.id === tabId);
+                                      if (!exists) {
+                                        return [...prev, { id: tabId, type: 'roteiro', title: tabTitle, programState: savedState, cloudDocId: cloudId }];
+                                      }
+                                      return prev;
+                                    });
+                                    setActiveTabId(tabId);
+                                  }
+                                } catch (err) {
+                                  console.error("Error loading fresh program from cloud:", err);
+                                  setState(savedState);
+                                  baseStateRef.current = savedState;
+                                  setActiveCloudDocId(cloudId);
+                                  
+                                  const tabId = `roteiro-${cloudId}`;
+                                  const tabTitle = savedState.nomePrograma || 'Sem Título';
+                                  setOpenedTabs(prev => {
+                                    const exists = prev.some(t => t.id === tabId);
+                                    if (!exists) {
+                                      return [...prev, { id: tabId, type: 'roteiro', title: tabTitle, programState: savedState, cloudDocId: cloudId }];
+                                    }
+                                    return prev;
+                                  });
+                                  setActiveTabId(tabId);
+                                }
+                              } else {
+                                baseStateRef.current = null;
+                                setState(savedState);
+                                setActiveCloudDocId(null);
+                              }
+                            }}
+                            currentUser={currentUser}
+                            activeCloudDocId={activeCloudDocId}
+                            onActiveCloudDocIdChange={setActiveCloudDocId}
+                            refreshTrigger={cloudRefreshTrigger}
+                            onUnlink={handleUnlinkCloudDoc}
+                          />
                         </div>
                       </div>
-                    )}
-
-                    {/* Global info dashboard */}
-                    <ProgramInfo
-                      nomePrograma={state.nomePrograma}
-                      setNomePrograma={(v) => setState(prev => ({ ...prev, nomePrograma: v }))}
-                      editorChefe={state.editorChefe || ''}
-                      setEditorChefe={(v) => setState(prev => ({ ...prev, editorChefe: v }))}
-                      tempoPrograma={state.tempoPrograma}
-                      setTempoPrograma={(v) => setState(prev => ({ ...prev, tempoPrograma: v }))}
-                      dataPrograma={state.dataPrograma || ''}
-                      setDataPrograma={(v) => setState(prev => ({ ...prev, dataPrograma: v }))}
-                      tempoTotal={tempoTotalLabel}
-                      tempoUsado={tempoUsadoLabel}
-                      tempoRestante={tempoRestanteLabel}
-                      isExtrapolado={isExtrapolated}
-                      onAddBloco={handleAddBloco}
-                      onAddComercial={handleAddComercial}
-                      onImprimir={handleImprimir}
-                      onSalvar={handleSalvar}
-                      onCarregar={handleCarregar}
-                      onClearProgram={handleClearProgram}
-                      fileInputRef={fileInputRef}
-                      registeredPrograms={registeredPrograms}
-                      onAddRegisteredProgram={handleAddRegisteredProgram}
-                      onDeleteRegisteredProgram={handleDeleteRegisteredProgram}
-                    />
-
-                    <CloudSyncPanel
-                      currentProgramState={state}
-                      onLoadProgram={async (savedState, cloudId) => {
-                        if (cloudId) {
-                          baseStateRef.current = null;
-                          try {
-                            const freshDoc = await getDoc(doc(db, 'programs', cloudId));
-                            if (freshDoc.exists()) {
-                              const d = freshDoc.data();
-                              const loaded: ProgramState = {
-                                nomePrograma: d.nomePrograma || '',
-                                editorChefe: d.editorChefe || '',
-                                tempoPrograma: d.tempoPrograma || '00:00:00',
-                                dataPrograma: d.dataPrograma || '',
-                                blocos: (d.blocos || []).map((b: any) => ({
-                                  ...b,
-                                  laudas: (b.laudas || []).map((l: any) => ({
-                                    ...l,
-                                    gc: l.gc || '',
-                                    gcs: l.gcs || [],
-                                    aprovado: !!l.aprovado
-                                  }))
-                                }))
-                              };
-                              setState(loaded);
-                              baseStateRef.current = loaded;
-                            } else {
-                              setState(savedState);
-                              baseStateRef.current = savedState;
-                            }
-                          } catch (err) {
-                            console.error("Error loading fresh program from cloud:", err);
-                            setState(savedState);
-                            baseStateRef.current = savedState;
-                          }
-                          setActiveCloudDocId(cloudId);
-                        } else {
-                          baseStateRef.current = null;
-                          setState(savedState);
-                          setActiveCloudDocId(null);
-                        }
-                      }}
-                      currentUser={currentUser}
-                      activeCloudDocId={activeCloudDocId}
-                      onActiveCloudDocIdChange={setActiveCloudDocId}
-                    />
-
-                    {/* Dynamic List Blocks */}
-                    <div className="space-y-6">
-                      {state.blocos.length === 0 ? (
-                        <div className="rounded-2xl border border-dashed border-zinc-800 bg-[#0f0f11]/40 p-10 text-center space-y-6 max-w-xl mx-auto my-8">
-                          <div className="mx-auto w-12 h-12 rounded-full bg-zinc-900 flex items-center justify-center text-zinc-500 border border-zinc-805">
-                            <FolderX className="w-6 h-6 stroke-[1.8]" />
-                          </div>
-                          <div className="space-y-2">
-                            <h3 className="text-zinc-200 font-sans font-bold text-lg">Nenhum Espelho Aberto</h3>
-                            <p className="text-zinc-400 text-sm max-w-sm mx-auto leading-relaxed">
-                              Crie blocos ou intervalos para começar a escrever seu roteiro, ou escolha um espelho salvo na nuvem logo abaixo no painel.
-                            </p>
-                          </div>
-                          <div className="flex flex-wrap items-center justify-center gap-3">
-                            <button
-                              onClick={handleAddBloco}
-                              className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs uppercase tracking-wider rounded-lg transition-all active:scale-95 duration-100 cursor-pointer flex items-center gap-1.5"
-                            >
-                              <Plus className="w-4 h-4 stroke-[2.5]" />
-                              <span>Inserir Novo Bloco</span>
-                            </button>
-                            <button
-                              onClick={handleAddComercial}
-                              className="px-4 py-2 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 font-extrabold text-xs uppercase tracking-wider rounded-lg transition-all active:scale-95 duration-100 cursor-pointer flex items-center gap-1.5 border border-zinc-750"
-                            >
-                              <Plus className="w-4 h-4 stroke-[2.5]" />
-                              <span>Inserir Intervalo</span>
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        state.blocos.map((block, idx) => {
-                          const blockSeconds = getBlockDurationSeconds(block);
-                          const blockDurationStr = formatarSegundosEmHHMMSS(blockSeconds);
-
+                    ) : (
+                      (() => {
+                        const tab = openedTabs.find(t => t.id === activeTabId);
+                        if (!tab) return null;
+                        
+                        if (tab.type === 'roteiro') {
                           return (
-                            <BlockItem
-                              key={block.id}
-                              block={block}
-                              index={idx}
-                              totalBlocksCount={state.blocos.length}
-                              onMoveUp={handleMoveBlockUp}
-                              onMoveDown={handleMoveBlockDown}
-                              onDelete={handleDeleteBlock}
-                              onUpdateBlockTitle={handleUpdateBlockTitle}
-                              onAddLauda={handleAddLauda}
-                              onDeleteLauda={handleDeleteLauda}
-                              onUpdateLauda={handleUpdateLauda}
-                              onOpenLaudaEditor={(bId, lauda) => setLaudaEditorState({
-                                isOpen: true,
-                                blockId: bId,
-                                lauda,
-                              })}
-                              onMoveLaudaUp={handleMoveLaudaUp}
-                              onMoveLaudaDown={handleMoveLaudaDown}
-                              onMoveLaudaAcrossBlocks={handleMoveLaudaAcrossBlocks}
-                              blockDurationStr={blockDurationStr}
-                              colaboradores={colaboradores}
-                              teleprompterActiveLaudaId={state.teleprompterActiveLaudaId}
+                            <div className="space-y-6">
+                              {/* ProgramInfo in toolbar mode */}
+                              <ProgramInfo
+                                nomePrograma={state.nomePrograma}
+                                setNomePrograma={(v) => setState(prev => ({ ...prev, nomePrograma: v }))}
+                                editorChefe={state.editorChefe || ''}
+                                setEditorChefe={(v) => setState(prev => ({ ...prev, editorChefe: v }))}
+                                tempoPrograma={state.tempoPrograma}
+                                setTempoPrograma={(v) => setState(prev => ({ ...prev, tempoPrograma: v }))}
+                                dataPrograma={state.dataPrograma || ''}
+                                setDataPrograma={(v) => setState(prev => ({ ...prev, dataPrograma: v }))}
+                                tempoTotal={tempoTotalLabel}
+                                tempoUsado={tempoUsadoLabel}
+                                tempoRestante={tempoRestanteLabel}
+                                isExtrapolado={isExtrapolated}
+                                onAddBloco={handleAddBloco}
+                                onAddComercial={handleAddComercial}
+                                onImprimir={handleImprimir}
+                                onSalvar={handleSalvar}
+                                onCarregar={handleCarregar}
+                                onExportVideoSequence={handleExportVideoSequence}
+                                onClearProgram={handleClearProgram}
+                                fileInputRef={fileInputRef}
+                                registeredPrograms={registeredPrograms}
+                                onAddRegisteredProgram={handleAddRegisteredProgram}
+                                onDeleteRegisteredProgram={handleDeleteRegisteredProgram}
+                                showMode="toolbar"
+                                onOpenProgramasTab={isAdmin ? handleOpenProgramasTab : undefined}
+                                onSaveToCloud={handleSaveToCloud}
+                                isSavingToCloud={isSavingToCloud}
+                                saveToCloudSuccess={saveToCloudSuccess}
+                                activeCloudDocId={activeCloudDocId}
+                                onUnlinkCloudDoc={handleUnlinkCloudDoc}
+                                originalNomePrograma={baseStateRef.current?.nomePrograma}
+                              />
+
+                              {/* Dynamic List Blocks of the Active Program */}
+                              <div className="space-y-6">
+                                {state.blocos.length === 0 ? (
+                                  <div className="rounded-2xl border border-dashed border-zinc-805 bg-[#0f0f11]/40 p-10 text-center space-y-6 max-w-xl mx-auto my-8">
+                                    <div className="mx-auto w-12 h-12 rounded-full bg-zinc-900 flex items-center justify-center text-zinc-500 border border-zinc-850">
+                                      <FolderX className="w-6 h-6 stroke-[1.8]" />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <h3 className="text-zinc-200 font-sans font-bold text-lg">Nenhum Bloco Cadastrado</h3>
+                                      <p className="text-zinc-400 text-sm max-w-sm mx-auto leading-relaxed">
+                                        Insira blocos ou comerciais para começar a estruturar a exibição deste programa.
+                                      </p>
+                                    </div>
+                                    <div className="flex flex-wrap items-center justify-center gap-3">
+                                      <button
+                                        onClick={handleAddBloco}
+                                        className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs uppercase tracking-wider rounded-lg transition-all active:scale-95 duration-100 cursor-pointer flex items-center gap-1.5"
+                                      >
+                                        <Plus className="w-4 h-4 stroke-[2.5]" />
+                                        <span>Inserir Bloco</span>
+                                      </button>
+                                      <button
+                                        onClick={handleAddComercial}
+                                        className="px-4 py-2 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 font-extrabold text-xs uppercase tracking-wider rounded-lg transition-all active:scale-95 duration-100 cursor-pointer flex items-center gap-1.5 border border-zinc-750"
+                                      >
+                                        <Plus className="w-4 h-4 stroke-[2.5]" />
+                                        <span>Inserir Comercial</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  state.blocos.map((block, idx) => {
+                                    const blockSeconds = getBlockDurationSeconds(block);
+                                    const blockDurationStr = formatarSegundosEmHHMMSS(blockSeconds);
+
+                                    return (
+                                      <BlockItem
+                                        key={block.id}
+                                        block={block}
+                                        index={idx}
+                                        totalBlocksCount={state.blocos.length}
+                                        onMoveUp={handleMoveBlockUp}
+                                        onMoveDown={handleMoveBlockDown}
+                                        onDelete={handleDeleteBlock}
+                                        onUpdateBlockTitle={handleUpdateBlockTitle}
+                                        onAddLauda={handleAddLauda}
+                                        onDeleteLauda={handleDeleteLauda}
+                                        onUpdateLauda={handleUpdateLauda}
+                                        onOpenLaudaEditor={(bId, lauda) => handleOpenLaudaTab(bId, lauda)}
+                                        onMoveLaudaUp={handleMoveLaudaUp}
+                                        onMoveLaudaDown={handleMoveLaudaDown}
+                                        onMoveLaudaAcrossBlocks={handleMoveLaudaAcrossBlocks}
+                                        blockDurationStr={blockDurationStr}
+                                        colaboradores={colaboradores}
+                                        teleprompterActiveLaudaId={state.teleprompterActiveLaudaId}
+                                      />
+                                    );
+                                  })
+                                )}
+                              </div>
+
+                              {/* Floating live controls helper */}
+                              {state.blocos.length > 0 && (
+                                <div className="fixed bottom-6 right-6 flex flex-col gap-2.5 z-40 no-print">
+                                  <button
+                                    onClick={handleGerarTeleprompterPdf}
+                                    className="flex items-center gap-2 px-4 py-3 bg-[#111113] hover:bg-zinc-800 border border-zinc-750 text-zinc-300 hover:text-white rounded-full shadow-2xl font-semibold text-xs uppercase tracking-wide transition-all active:scale-95 duration-100 cursor-pointer"
+                                    title="Download PDF de todas as laudas rascunhadas para Teleprompter"
+                                  >
+                                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
+                                    <span>Gerar Roteiro PDF</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+                        if (tab.type === 'programas') {
+                          return (
+                            <ProgramasTab
+                              currentUser={currentUser}
+                              registeredPrograms={registeredPrograms}
+                              onAddRegisteredProgram={handleAddRegisteredProgram}
+                              onDeleteRegisteredProgram={handleDeleteRegisteredProgram}
+                              isTabMode={true}
                             />
                           );
-                        })
-                      )}
-                    </div>
-
-                    {/* Floating live controls helper */}
-                    <div className="fixed bottom-6 right-6 flex flex-col gap-2.5 z-40 no-print">
-                      <button
-                        onClick={handleGerarTeleprompterPdf}
-                        className="flex items-center gap-2 px-4 py-3 bg-[#111113] hover:bg-zinc-800 border border-zinc-750 text-zinc-300 hover:text-white rounded-full shadow-2xl font-semibold text-xs uppercase tracking-wide transition-all active:scale-95 duration-100 cursor-pointer"
-                        title="Download PDF de todas as laudas rascunhadas para Teleprompter"
-                      >
-                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-                        <span>Gerar Roteiro PDF</span>
-                      </button>
-                    </div>
-                  </>
+                        }
+                        if (tab.type === 'pautas') {
+                          return (
+                            <PautasTab
+                              currentUser={currentUser}
+                              colaboradores={colaboradores}
+                            />
+                          );
+                        }
+                        if (tab.type === 'reportagens') {
+                          return (
+                            <ReportagensTab
+                              currentUser={currentUser}
+                              colaboradores={colaboradores}
+                              registeredPrograms={registeredPrograms}
+                            />
+                          );
+                        }
+                        if (tab.type === 'agendas') {
+                          return (
+                            <AgendasTab
+                              currentUser={currentUser}
+                            />
+                          );
+                        }
+                        if (!tab.blockId || !tab.laudaId) return null;
+                        return (
+                          <LaudaTabEditor
+                            key={tab.id}
+                            tabId={tab.id}
+                            blockId={tab.blockId}
+                            laudaId={tab.laudaId}
+                            initialContent={tab.currentContent || ''}
+                            initialGc={tab.currentGc || ''}
+                            initialGcs={tab.currentGcs}
+                            materiaTitle={tab.materiaTitle || ''}
+                            onSave={(content, gc, gcs) => handleSaveLaudaTab(tab.id, content, gc, gcs)}
+                            onClose={() => handleCloseTab(tab.id)}
+                            onUpdateTempState={(content, gc, gcs) => handleUpdateTabTempState(tab.id, content, gc, gcs)}
+                            currentUserEmail={currentUser?.email || undefined}
+                          />
+                        );
+                      })()
+                    )}
+                  </div>
                 )}
               </motion.div>
             </AnimatePresence>
@@ -1854,6 +3009,8 @@ export default function App() {
         materiaTitle={laudaEditorState.lauda?.materia || ''}
         initialContent={laudaEditorState.lauda?.laudaContent || ''}
         initialGc={laudaEditorState.lauda?.gc || laudaEditorState.lauda?.gcs?.[0]?.titulo || ''}
+        laudaId={laudaEditorState.lauda?.id || ''}
+        currentUserEmail={currentUser?.email || undefined}
         onSave={(updatedContent, updatedGc) => {
           if (laudaEditorState.blockId && laudaEditorState.lauda) {
             const existingGcs = laudaEditorState.lauda.gcs || [];

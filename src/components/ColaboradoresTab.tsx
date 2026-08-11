@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { db, collection, addDoc, deleteDoc, doc, query, onSnapshot, setDoc, updateDoc } from '../firebase';
 import { type User } from '../firebase';
-import { Colaborador, ColaboradorFuncao, capitalizeName } from '../types';
+import { Colaborador, ColaboradorFuncao, capitalizeName, isUserAdmin } from '../types';
 import { 
   Users, 
   Plus, 
@@ -51,7 +51,7 @@ export default function ColaboradoresTab({ currentUser }: ColaboradoresTabProps)
     { nome: 'Luiz Cintra', email: 'luizphilipecintra210@gmail.com', funcao: 'Demais funções' as const, aliases: ['Philipe Cintra'] }
   ];
 
-  const isAdmin = currentUser?.email?.toLowerCase() === 'weverton.alvesdevetor@gmail.com' || !currentUser || currentUser.uid === 'offline-editor';
+  const isAdmin = isUserAdmin(currentUser?.email) || !currentUser || currentUser.uid === 'offline-editor';
   const [isSyncingLogins, setIsSyncingLogins] = useState(false);
 
   const findMatchingColab = (systemName: string, aliases: string[] = []) => {
@@ -856,11 +856,11 @@ export default function ColaboradoresTab({ currentUser }: ColaboradoresTabProps)
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            <div className="flex flex-col">
               {filteredColaboradores.map((colab) => (
                 <div
                   key={colab.id}
-                  className="group flex items-center justify-between bg-[#111113]/40 border border-zinc-800 hover:border-zinc-700/80 rounded-xl p-4 transition-all shadow-xs hover:shadow-md hover:shadow-black/5"
+                  className="group flex items-center justify-between bg-transparent border-b border-zinc-850/50 hover:bg-[#111113]/30 py-3.5 transition-all"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-9 h-9 bg-zinc-900 rounded-full flex items-center justify-center border border-zinc-800 shrink-0 text-zinc-400 font-display font-bold text-sm tracking-tighter uppercase">

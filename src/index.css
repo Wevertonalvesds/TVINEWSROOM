@@ -129,3 +129,183 @@
 .print-demand-container {
   display: none;
 }
+
+/* ==========================================
+   Sophisticated Light Theme Overrides
+   ========================================== */
+
+/* Root light theme variables */
+:root.light-theme {
+  --bg-main: #f8fafc; /* slate-50 */
+  --text-main: #0f172a; /* slate-900 */
+}
+
+/* Base resets for light theme */
+.light-theme body,
+.light-theme #root,
+.light-theme .min-h-screen {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+/* Background overrides */
+.light-theme .bg-\[\#050510\],
+.light-theme .bg-\[\#09090b\],
+.light-theme .bg-\[\#0b0b0d\],
+.light-theme .bg-zinc-950,
+.light-theme .bg-zinc-900,
+.light-theme .bg-\[\#0c0c0e\]\/30,
+.light-theme .bg-\[\#0d0d0f\],
+.light-theme .bg-zinc-950\/40,
+.light-theme .bg-[#0b0b0d],
+.light-theme .bg-[#09090b],
+.light-theme .bg-[#0a0a0c],
+.light-theme .bg-zinc-900\/40 {
+  background-color: #f8fafc !important;
+}
+
+.light-theme .bg-\[\#0c0c0e\],
+.light-theme .bg-\[\#141416\],
+.light-theme .bg-\[\#18181b\]\/85,
+.light-theme .bg-zinc-800,
+.light-theme .bg-zinc-850,
+.light-theme .bg-\[\#0f0f11\]\/40,
+.light-theme .bg-\[\#141416\]\/90,
+.light-theme .bg-zinc-900\/50,
+.light-theme .bg-zinc-950\/20,
+.light-theme .bg-zinc-850\/40,
+.light-theme .bg-zinc-950\/60,
+.light-theme .bg-zinc-900\/90 {
+  background-color: #ffffff !important;
+}
+
+/* Sidebar & Header specific styles */
+.light-theme aside {
+  background-color: #f1f5f9 !important; /* slate-100 */
+  border-right: 1px solid #e2e8f0 !important; /* slate-200 */
+}
+
+.light-theme header {
+  background-color: #ffffff !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+}
+
+/* Text overrides */
+.light-theme .text-zinc-100,
+.light-theme .text-zinc-200,
+.light-theme .text-zinc-300,
+.light-theme .text-zinc-50,
+.light-theme .text-zinc-250,
+.light-theme .text-[#9ca3af],
+.light-theme .text-zinc-400 {
+  color: #1e293b !important; /* slate-800 */
+}
+
+.light-theme .text-zinc-350 {
+  color: #475569 !important; /* slate-600 */
+}
+
+.light-theme .text-zinc-500 {
+  color: #64748b !important; /* slate-500 */
+}
+
+/* Hover element effects */
+.light-theme .hover\:text-white:hover,
+.light-theme .hover\:text-zinc-200:hover {
+  color: #0f172a !important;
+}
+
+/* Sidebar navigation buttons */
+.light-theme nav button:not(.bg-amber-500) {
+  color: #475569 !important;
+}
+.light-theme nav button:not(.bg-amber-500):hover {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+.light-theme nav button.bg-\[\#141416\],
+.light-theme nav button.bg-zinc-900 {
+  background-color: #cbd5e1 !important; /* slate-300 active */
+  color: #0f172a !important;
+}
+
+/* Forms, inputs and fields */
+.light-theme input,
+.light-theme textarea,
+.light-theme select {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid #cbd5e1 !important;
+}
+.light-theme input:focus,
+.light-theme textarea:focus,
+.light-theme select:focus {
+  border-color: #6366f1 !important;
+  outline: none !important;
+}
+
+/* Border overrides */
+.light-theme .border-zinc-800,
+.light-theme .border-zinc-850,
+.light-theme .border-zinc-850\/80,
+.light-theme .border-\[\#18181b\]\/50,
+.light-theme .border-zinc-805,
+.light-theme .border-zinc-900\/50,
+.light-theme .border-zinc-850\/40,
+.light-theme .divide-zinc-800\/40 > * {
+  border-color: #e2e8f0 !important; /* slate-200 */
+}
+
+/* Modal layers */
+.light-theme .fixed.inset-0.bg-black\/80,
+.light-theme .fixed.inset-0.bg-zinc-950\/80,
+.light-theme .fixed.inset-0.bg-black\/70 {
+  background-color: rgba(15, 23, 42, 0.6) !important;
+  backdrop-blur: sm;
+}
+
+/* Tables, lists and custom container outlines */
+.light-theme .bg-zinc-900,
+.light-theme .bg-zinc-950 {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+.light-theme .hover\:bg-zinc-850:hover,
+.light-theme .hover\:bg-zinc-900\/40:hover {
+  background-color: #f1f5f9 !important;
+}
+
+/* Custom list items and lists active tags */
+.light-theme .bg-zinc-950\/40 {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* Scrollbar adaptation for light mode */
+.light-theme ::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+.light-theme ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+.light-theme ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ========================================================
+   CRITICAL EXCLUSION: KEEP TELEPROMPTER ENTIRELY DARK
+   ======================================================== */
+.light-theme .teleprompter-dark,
+.light-theme .teleprompter-dark *,
+.light-theme .teleprompter-dark div,
+.light-theme .teleprompter-dark span,
+.light-theme .teleprompter-dark button,
+.light-theme .teleprompter-dark select,
+.light-theme .teleprompter-dark p,
+.light-theme .teleprompter-dark h2 {
+  background-color: revert !important;
+  color: revert !important;
+  border-color: revert !important;
+}
+

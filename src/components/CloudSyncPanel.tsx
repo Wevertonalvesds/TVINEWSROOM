@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Cloud, CloudUpload, CloudDownload, Database, Trash2, History, Calendar, RefreshCw, X, CheckCircle, Check
+  Cloud, CloudUpload, CloudDownload, Database, Trash2, History, Calendar, RefreshCw, X, CheckCircle, Check, Sliders, Eye, Pencil
 } from 'lucide-react';
 import { db, collection, addDoc, getDocs, deleteDoc, doc, updateDoc, serverTimestamp, query, orderBy, where, type User } from '../firebase';
 import { ProgramState } from '../types';
@@ -47,6 +47,8 @@ interface CloudProgram {
   id: string;
   nomePrograma: string;
   tempoPrograma: string;
+  editorChefe?: string;
+  dataPrograma?: string;
   updatedAt: any;
   blocosCount: number;
   laudasCount: number;
@@ -59,6 +61,8 @@ interface CloudSyncPanelProps {
   currentUser: User | null;
   activeCloudDocId: string | null;
   onActiveCloudDocIdChange: (id: string | null) => void;
+  refreshTrigger?: number;
+  onUnlink?: () => void;
 }
 
 export default function CloudSyncPanel({
@@ -66,7 +70,9 @@ export default function CloudSyncPanel({
   onLoadProgram,
   currentUser,
   activeCloudDocId,
-  onActiveCloudDocIdChange
+  onActiveCloudDocIdChange,
+  refreshTrigger = 0,
+  onUnlink
 }: CloudSyncPanelProps) {
   const [programs, setPrograms] = useState<CloudProgram[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -122,6 +128,8 @@ export default function CloudSyncPanel({
           id: docSnap.id,
           nomePrograma: data.nomePrograma || 'SEM TÍTULO',
           tempoPrograma: data.tempoPrograma || '00:00:00',
+          editorChefe: data.editorChefe || '',
+          dataPrograma: data.dataPrograma || '',
           updatedAt: dateObj,
           blocosCount: bCount,
           laudasCount: lCount,
@@ -154,7 +162,7 @@ export default function CloudSyncPanel({
 
   useEffect(() => {
     fetchCloudPrograms();
-  }, [currentUser]);
+  }, [currentUser, refreshTrigger]);
 
   // Save current program state to cloud
   const handleSaveToCloud = async () => {
@@ -189,6 +197,15 @@ export default function CloudSyncPanel({
       try {
         let savedId = activeCloudDocId;
         if (existing) {
+          // If we don't have an active document, but there is an existing document with this name, ask before overwriting!
+          if (!activeCloudDocId) {
+            const confirmOverwrite = window.confirm(`Já existe um roteiro de "${currentProgramState.nomePrograma.trim()}" salvo na nuvem. Deseja sobrescrevê-lo? Se cancelar, mude o nome do programa para salvar como um novo roteiro.`);
+            if (!confirmOverwrite) {
+              setIsSaving(false);
+              setSyncStatus('idle');
+              return;
+            }
+          }
           // Overwrite existing doc
           const docRef = doc(db, 'programs', existing.id);
           await updateDoc(docRef, payload);
@@ -236,6 +253,13 @@ export default function CloudSyncPanel({
       } catch (innerErr) {
         handleFirestoreError(innerErr, OperationType.DELETE, `programs/${id}`, currentUser);
       }
+      
+      // If the deleted document is the active one, clear active document states
+      if (id === activeCloudDocId) {
+        onActiveCloudDocIdChange(null);
+        sessionStorage.removeItem('rede_tvi_active_cloud_doc_id');
+      }
+
       setPrograms(prev => prev.filter(p => p.id !== id));
     } catch (err: any) {
       console.error('Error deleting cloud document:', err);
@@ -294,40 +318,15 @@ export default function CloudSyncPanel({
         {/* Action button triggers */}
         <div className="flex items-center gap-2 self-start md:self-auto">
           {currentUser ? (
-            <>
-              <button
-                type="button"
-                onClick={fetchCloudPrograms}
-                disabled={isLoading}
-                className="p-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-800 rounded-lg transition-colors cursor-pointer"
-                title="Atualizar lista da nuvem"
-              >
-                <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-              </button>
-
-              <button
-                type="button"
-                onClick={handleSaveToCloud}
-                disabled={isSaving}
-                className={`px-4 py-2 text-xs font-semibold uppercase tracking-wider rounded-lg transition-all flex items-center gap-2 shadow-lg cursor-pointer ${
-                  saveSuccess 
-                    ? 'bg-emerald-600 hover:bg-emerald-550 text-white shadow-emerald-600/10'
-                    : 'bg-gradient-to-r from-amber-550 to-amber-600 hover:from-amber-450 hover:to-amber-500 text-zinc-950 shadow-amber-550/15'
-                }`}
-              >
-                {saveSuccess ? (
-                  <>
-                    <Check className="w-4 h-4 text-white stroke-[2.5]" />
-                    <span className="text-white">Salvo na Nuvem!</span>
-                  </>
-                ) : (
-                  <>
-                    <CloudUpload className="w-4 h-4" />
-                    <span>Salvar Espelho</span>
-                  </>
-                )}
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={fetchCloudPrograms}
+              disabled={isLoading}
+              className="p-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-800 rounded-lg transition-colors cursor-pointer"
+              title="Atualizar lista da nuvem"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            </button>
           ) : (
             <div className="text-[11px] text-zinc-500 font-mono italic select-none">
               Modo Convidado (Offline)
@@ -370,6 +369,16 @@ export default function CloudSyncPanel({
         <div className="flex flex-col gap-2.5">
           {programs.map((prog) => {
             const isCurrent = activeCloudDocId === prog.id;
+            
+            const formatDateString = (dateStr?: string) => {
+              if (!dateStr) return 'Não informada';
+              const parts = dateStr.split('-');
+              if (parts.length === 3) {
+                return `${parts[2]}/${parts[1]}/${parts[0]}`;
+              }
+              return dateStr;
+            };
+
             return (
               <div 
                 key={prog.id}
@@ -377,50 +386,89 @@ export default function CloudSyncPanel({
                   if (isCurrent) return;
                   onLoadProgram(prog.state, prog.id);
                 }}
-                className={`p-3.5 bg-[#121214] border rounded-xl text-left transition-all group relative flex flex-col md:flex-row md:items-center md:justify-between gap-4 ${
+                className={`p-3.5 bg-[#121214] border rounded-xl text-left transition-all group relative flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 ${
                   isCurrent 
-                    ? 'border-amber-555/30 ring-1 ring-amber-555/10 bg-amber-555/[0.01] cursor-default' 
+                    ? 'border-amber-500/30 ring-1 ring-amber-500/10 bg-amber-500/[0.01]' 
                     : 'border-zinc-850 hover:border-zinc-700 cursor-pointer hover:bg-zinc-900/60'
                 }`}
               >
                 {/* Left side info */}
-                <div className="flex-1 min-w-0 space-y-1.5">
+                <div className="flex-1 min-w-0 space-y-2">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-display font-bold text-sm text-zinc-200 group-hover:text-amber-500/90 transition-colors">
+                    <span className="font-display font-bold text-sm text-zinc-200 group-hover:text-amber-500/90 transition-colors uppercase">
                       {prog.nomePrograma}
                     </span>
                     {isCurrent && (
                       <span className="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-amber-500/10 text-amber-500 border border-amber-500/25 shrink-0 uppercase tracking-wider">
-                        Ativo
+                        Ativo / Editando
                       </span>
                     )}
                   </div>
                   
-                  {/* Metadata line */}
-                  <div className="flex flex-wrap gap-2.5 items-center text-zinc-550 text-[10px] font-mono">
+                  {/* Detailed Metadata line */}
+                  <div className="flex flex-wrap gap-x-2.5 gap-y-1.5 items-center text-zinc-500 text-[10px] font-mono">
                     <span className="text-zinc-400 font-bold uppercase">{prog.tempoPrograma}</span>
-                    <span className="text-zinc-700 font-mono text-xs">•</span>
+                    <span className="text-zinc-800 font-bold text-xs">•</span>
                     <span>{prog.blocosCount} {prog.blocosCount === 1 ? 'Bloco' : 'Blocos'}</span>
-                    <span className="text-zinc-700 font-mono text-xs">•</span>
+                    <span className="text-zinc-800 font-bold text-xs">•</span>
                     <span>{prog.laudasCount} {prog.laudasCount === 1 ? 'Lauda' : 'Laudas'}</span>
-                    <span className="text-zinc-700 font-mono text-xs">•</span>
-                    <span className="flex items-center gap-1">
+                    <span className="text-zinc-800 font-bold text-xs">•</span>
+                    <span className="text-zinc-400">Editor-chefe: <strong className="text-zinc-300 font-semibold">{prog.editorChefe || 'Não informado'}</strong></span>
+                    <span className="text-zinc-800 font-bold text-xs">•</span>
+                    <span className="text-zinc-400">Exibição: <strong className="text-zinc-300 font-semibold">{formatDateString(prog.dataPrograma)}</strong></span>
+                    <span className="text-zinc-800 font-bold text-xs">•</span>
+                    <span className="flex items-center gap-1 text-zinc-400">
                       <Calendar className="w-3 h-3 text-zinc-550" />
-                      Atua: {formatFirebaseDate(prog.updatedAt)}
+                      <span>Atualizado: <strong className="text-zinc-300 font-semibold">{formatFirebaseDate(prog.updatedAt)}</strong></span>
                     </span>
                   </div>
                 </div>
 
-                {/* Right side actions */}
-                <div className="flex items-center gap-2 shrink-0 self-end md:self-auto pt-2.5 md:pt-0 border-t md:border-none border-zinc-900/40">
+                {/* Right side actions - Render three explicit buttons as requested */}
+                <div className="flex items-center gap-2 shrink-0 self-end lg:self-auto pt-2.5 lg:pt-0 border-t lg:border-none border-zinc-900/40">
+                  
+                  {/* Editar Button */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onLoadProgram(prog.state, prog.id);
+                    }}
+                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                      isCurrent 
+                        ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20 cursor-default' 
+                        : 'bg-amber-500 hover:bg-amber-450 text-zinc-950 font-extrabold active:scale-95'
+                    }`}
+                    title="Editar este roteiro"
+                  >
+                    <Pencil className="w-3 h-3" />
+                    <span>Editar</span>
+                  </button>
+
+                  {/* Visualizar Button */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onLoadProgram(prog.state, prog.id);
+                    }}
+                    className="flex items-center gap-1 px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 hover:text-white border border-zinc-700 rounded-lg text-xs font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95"
+                    title="Visualizar este roteiro"
+                  >
+                    <Eye className="w-3 h-3" />
+                    <span>Visualizar</span>
+                  </button>
+
+                  {/* Excluir Button */}
                   <button
                     type="button"
                     onClick={(e) => handleDeleteFromCloud(prog.id, e)}
-                    className="p-1.5 hover:bg-red-500/10 text-zinc-500 hover:text-red-500 rounded-lg transition-colors cursor-pointer border border-zinc-850 bg-zinc-900"
+                    className="p-1.5 hover:bg-red-500/10 text-zinc-500 hover:text-red-500 rounded-lg transition-colors cursor-pointer border border-zinc-800 bg-[#121214]"
                     title="Excluir da Nuvem"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
+
                 </div>
               </div>
             );

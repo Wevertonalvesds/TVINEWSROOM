@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { X, FileText, AlertCircle, Clock, RefreshCw, Tv } from 'lucide-react';
+import { X, FileText, AlertCircle, Clock, RefreshCw, Tv, History } from 'lucide-react';
+import LaudaVersionHistoryModal from './LaudaVersionHistoryModal';
 
 interface LaudaModalProps {
   isOpen: boolean;
@@ -8,6 +9,8 @@ interface LaudaModalProps {
   initialContent: string;
   initialGc: string;
   materiaTitle: string;
+  laudaId: string;
+  currentUserEmail?: string;
 }
 
 export default function LaudaModal({
@@ -17,10 +20,13 @@ export default function LaudaModal({
   initialContent,
   initialGc,
   materiaTitle,
+  laudaId,
+  currentUserEmail,
 }: LaudaModalProps) {
   const [content, setContent] = useState(initialContent);
   const [gc, setGc] = useState(initialGc || '');
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
   useEffect(() => {
     setContent(initialContent);
@@ -143,6 +149,15 @@ export default function LaudaModal({
               >
                 <span>DEIXAR EM MAIÚSCULAS</span>
               </button>
+              <button
+                type="button"
+                onClick={() => setIsHistoryOpen(true)}
+                className="text-[10px] md:text-xs font-bold uppercase tracking-wider bg-zinc-800 hover:bg-zinc-700 hover:text-amber-500 text-zinc-200 px-3 py-1 rounded transition-all cursor-pointer flex items-center gap-1.5 border border-zinc-700/50"
+                title="Ver histórico de alterações"
+              >
+                <History className="w-3 h-3 text-amber-500" />
+                <span>Histórico</span>
+              </button>
             </div>
           </div>
           <textarea
@@ -194,6 +209,18 @@ export default function LaudaModal({
           </div>
         </div>
       </div>
+
+      <LaudaVersionHistoryModal
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+        laudaId={laudaId}
+        laudaTitle={materiaTitle}
+        currentUserEmail={currentUserEmail}
+        onRevert={(revertedContent, revertedGc) => {
+          setContent(revertedContent);
+          setGc(revertedGc);
+        }}
+      />
     </div>
   );
 }

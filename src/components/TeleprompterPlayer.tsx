@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   X, Play, Pause, RotateCcw, Type, ChevronUp, ChevronDown, 
   FlipHorizontal, Info, Eye, Settings, Keyboard, Bluetooth, BluetoothOff,
-  ArrowLeft, ArrowRight
+  ArrowLeft, ArrowRight, Maximize, Minimize
 } from 'lucide-react';
 import { Block, GCEntry } from '../types';
 
@@ -27,15 +27,20 @@ const DEFAULT_SHORTCUTS = {
 
 function getFriendlyKeyName(code: string): string {
   if (!code) return 'Nenhum';
-  if (code === 'Space') return 'Espaço';
+  if (code === 'Space' || code === ' ') return 'Espaço';
   if (code === 'ArrowUp') return 'Seta Cima';
   if (code === 'ArrowDown') return 'Seta Baixo';
   if (code === 'ArrowLeft') return 'Seta Esquerda';
   if (code === 'ArrowRight') return 'Seta Direita';
   if (code === 'PageUp') return 'Page Up';
   if (code === 'PageDown') return 'Page Down';
-  if (code === 'Enter') return 'Enter';
+  if (code === 'Enter') return 'Enter / OK';
   if (code === 'Escape') return 'Esc';
+  if (code === 'VolumeUp') return 'Volume + (Botão Obturador)';
+  if (code === 'VolumeDown') return 'Volume -';
+  if (code === 'MediaPlayPause') return 'Media Play/Pause';
+  if (code === 'MediaNextTrack') return 'Avançar Faixa';
+  if (code === 'MediaPrevTrack') return 'Voltar Faixa';
   if (code.startsWith('Key')) return code.slice(3);
   if (code.startsWith('Digit')) return code.slice(5);
   return code;
@@ -49,11 +54,38 @@ export default function TeleprompterPlayer({
   onActiveLaudaChange,
 }: TeleprompterPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [speed, setSpeed] = useState(3); // 1 to 10
+  const [speed, setSpeed] = useState(4); // 1 to 15
   const [fontSize, setFontSize] = useState(48); // pixels
   const [isMirrored, setIsMirrored] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [bindingAction, setBindingAction] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isControlsVisible, setIsControlsVisible] = useState(true);
+
+  // Sync fullscreen change with document status
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.error("Error toggling fullscreen:", err);
+    }
+  };
 
   // Bluetooth control states
   const [activeTab, setActiveTab] = useState<'shortcuts' | 'bluetooth'>('shortcuts');
@@ -102,6 +134,9 @@ export default function TeleprompterPlayer({
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollIntervalRef = useRef<number | null>(null);
+  const scrollAccumulatorRef = useRef<number>(0);
+  const lastFrameTimeRef = useRef<number>(0);
+  const lastCheckTimeRef = useRef<number>(0);
 
   // Flatten normal and commercial blocks with content
   const scriptsToRead = blocos
@@ -200,15 +235,34 @@ export default function TeleprompterPlayer({
     }
   };
 
-  // Auto-scroll loop
+  // Auto-scroll loop with delta time normalization and exponential curve
   useEffect(() => {
     if (isPlaying) {
-      const scrollStep = () => {
+      if (scrollContainerRef.current) {
+        scrollAccumulatorRef.current = scrollContainerRef.current.scrollTop;
+      }
+      lastFrameTimeRef.current = performance.now();
+
+      const scrollStep = (timestamp: number) => {
         if (scrollContainerRef.current) {
           const container = scrollContainerRef.current;
-          // Speed conversion: 1 is slow, 10 is fast
-          const stepSize = speed * 0.4; 
-          container.scrollTop += stepSize;
+          const dt = Math.min(Math.max((timestamp - lastFrameTimeRef.current) / 16.6667, 0.2), 3.0);
+          lastFrameTimeRef.current = timestamp;
+
+          // Velocidade exponencial em pixels por frame a 60Hz:
+          // vel 1 -> ~0.5 px/frame (~30 px/s - leitura cadenciada)
+          // vel 5 -> ~4.3 px/frame (~260 px/s - velocidade normal)
+          // vel 10 -> ~11.3 px/frame (~680 px/s - 2.8x mais rápido que antes)
+          // vel 15 -> ~19.8 px/frame (~1200 px/s - ultra-rápido para telas grandes/4K)
+          const stepSize = Math.pow(speed, 1.4) * 0.45 * dt;
+
+          // Detecta se o usuário rolou manualmente (mouse/wheel/toque) e resincroniza o acumulador
+          if (Math.abs(container.scrollTop - Math.round(scrollAccumulatorRef.current)) > 10) {
+            scrollAccumulatorRef.current = container.scrollTop;
+          }
+
+          scrollAccumulatorRef.current += stepSize;
+          container.scrollTop = Math.round(scrollAccumulatorRef.current);
 
           // If reached bottom, pause
           if (container.scrollTop + container.clientHeight >= container.scrollHeight - 5) {
@@ -236,11 +290,17 @@ export default function TeleprompterPlayer({
   const lastSentLaudaIdRef = useRef<string | null>(null);
 
   // Monitor the scroll position to find which lauda is currently passing by the reading line (40% viewport Y)
+  // Throttled to prevent DOM Layout Thrashing ("garra/engasgo") during scrolling
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container || !isOpen) return;
 
     const checkActiveLauda = () => {
+      const now = performance.now();
+      // Executa checagem de bounding rect apenas a cada 350ms para nunca causar travamento / layout thrashing
+      if (now - lastCheckTimeRef.current < 350) return;
+      lastCheckTimeRef.current = now;
+
       const containerRect = container.getBoundingClientRect();
       // The reading line is at 40% of the container height
       const readingLineY = containerRect.top + containerRect.height * 0.4;
@@ -262,11 +322,11 @@ export default function TeleprompterPlayer({
       }
     };
 
-    // Attach scroll event listener
-    container.addEventListener('scroll', checkActiveLauda);
+    // Attach scroll event listener com { passive: true } para otimizar thread do navegador
+    container.addEventListener('scroll', checkActiveLauda, { passive: true });
     
     // Check initially and on window resize
-    const interval = setInterval(checkActiveLauda, 500); // Fail-safe fallback check every 500ms
+    const interval = setInterval(checkActiveLauda, 800); // Fail-safe fallback check every 800ms
     
     window.addEventListener('resize', checkActiveLauda);
     checkActiveLauda();
@@ -293,17 +353,22 @@ export default function TeleprompterPlayer({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!isOpen) return;
 
+      const matchesShortcut = (shortcutValue: string) => {
+        if (!shortcutValue) return false;
+        return e.code === shortcutValue || e.key === shortcutValue;
+      };
+
       // Monitor signals for the monitor UI panel
       let matchedAction = 'Nenhuma';
-      if (e.code === shortcuts.playPause) matchedAction = 'Play / Pause';
-      else if (e.code === shortcuts.speedUp) matchedAction = 'Aumentar Velocidade';
-      else if (e.code === shortcuts.speedDown) matchedAction = 'Diminuir Velocidade';
-      else if (e.code === shortcuts.scrollUp) matchedAction = 'Rolar para Cima';
-      else if (e.code === shortcuts.scrollDown) matchedAction = 'Rolar para Baixo';
-      else if (e.code === shortcuts.reset) matchedAction = 'Reiniciar';
-      else if (e.code === shortcuts.prevLauda) matchedAction = 'Lauda Anterior';
-      else if (e.code === shortcuts.nextLauda) matchedAction = 'Próxima Lauda';
-      else if (e.code === 'Escape') matchedAction = 'Fechar Prompter';
+      if (matchesShortcut(shortcuts.playPause)) matchedAction = 'Play / Pause';
+      else if (matchesShortcut(shortcuts.speedUp)) matchedAction = 'Aumentar Velocidade';
+      else if (matchesShortcut(shortcuts.speedDown)) matchedAction = 'Diminuir Velocidade';
+      else if (matchesShortcut(shortcuts.scrollUp)) matchedAction = 'Rolar para Cima';
+      else if (matchesShortcut(shortcuts.scrollDown)) matchedAction = 'Rolar para Baixo';
+      else if (matchesShortcut(shortcuts.reset)) matchedAction = 'Reiniciar';
+      else if (matchesShortcut(shortcuts.prevLauda)) matchedAction = 'Lauda Anterior';
+      else if (matchesShortcut(shortcuts.nextLauda)) matchedAction = 'Próxima Lauda';
+      else if (e.code === 'Escape' || e.key === 'Escape') matchedAction = 'Fechar Prompter';
       else if (e.code === 'PageDown' || e.key === 'PageDown') matchedAction = 'Avançar (Físico)';
       else if (e.code === 'PageUp' || e.key === 'PageUp') matchedAction = 'Voltar (Físico)';
       else if (e.code === 'Enter' || e.key === 'Enter') matchedAction = 'Play/Pause (Físico)';
@@ -318,8 +383,9 @@ export default function TeleprompterPlayer({
         e.preventDefault();
         e.stopPropagation();
         const actionToBind = bindingAction;
+        const keyToStore = e.code || e.key;
         setShortcuts((prev: any) => {
-          const updated = { ...prev, [actionToBind]: e.code };
+          const updated = { ...prev, [actionToBind]: keyToStore };
           localStorage.setItem('tvi_teleprompter_shortcuts_v2', JSON.stringify(updated));
           return updated;
         });
@@ -328,32 +394,32 @@ export default function TeleprompterPlayer({
       }
 
       // Action Handlers according to configured shortcuts
-      if (e.code === shortcuts.playPause) {
+      if (matchesShortcut(shortcuts.playPause)) {
         e.preventDefault();
         setIsPlaying(prev => !prev);
-      } else if (e.code === shortcuts.speedUp) {
+      } else if (matchesShortcut(shortcuts.speedUp)) {
         e.preventDefault();
-        setSpeed(prev => Math.min(prev + 1, 10));
-      } else if (e.code === shortcuts.speedDown) {
+        setSpeed(prev => Math.min(prev + 1, 15));
+      } else if (matchesShortcut(shortcuts.speedDown)) {
         e.preventDefault();
         setSpeed(prev => Math.max(prev - 1, 1));
-      } else if (e.code === shortcuts.scrollUp) {
+      } else if (matchesShortcut(shortcuts.scrollUp)) {
         e.preventDefault();
         if (scrollContainerRef.current) {
           scrollContainerRef.current.scrollTop -= 120;
         }
-      } else if (e.code === shortcuts.scrollDown) {
+      } else if (matchesShortcut(shortcuts.scrollDown)) {
         e.preventDefault();
         if (scrollContainerRef.current) {
           scrollContainerRef.current.scrollTop += 120;
         }
-      } else if (e.code === shortcuts.reset) {
+      } else if (matchesShortcut(shortcuts.reset)) {
         e.preventDefault();
         handleReset();
-      } else if (e.code === shortcuts.prevLauda) {
+      } else if (matchesShortcut(shortcuts.prevLauda)) {
         e.preventDefault();
         handlePrevLauda();
-      } else if (e.code === shortcuts.nextLauda) {
+      } else if (matchesShortcut(shortcuts.nextLauda)) {
         e.preventDefault();
         handleNextLauda();
       } else if (e.code === 'Escape') {
@@ -397,195 +463,250 @@ export default function TeleprompterPlayer({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[#050510] text-[#f4f4f7] no-print select-none">
+    <div className="fixed inset-0 z-50 flex flex-col bg-[#050510] text-[#f4f4f7] no-print select-none teleprompter-dark">
       
       {/* Top Banner Control Panel */}
-      <div className="flex flex-col md:flex-row items-center justify-between px-6 py-4 bg-[#0a0a14] border-b border-zinc-800/80 gap-4">
-        <div className="flex items-center gap-3 w-full md:w-auto">
-          <div className="flex items-center justify-center p-2 bg-red-600 rounded-lg animate-pulse shrink-0">
-            <span className="text-[10px] font-bold text-white tracking-widest uppercase">PROMPTER LIVE</span>
-          </div>
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold tracking-wide font-display text-zinc-100 truncate">
-              {programTitle || "Programa sem Título"}
-            </h2>
-            <p className="text-[10px] text-zinc-400 mt-0.5 truncate">
-              Atalhos de teclado ativos. Compatível com passadores e controles Bluetooth.
-            </p>
-          </div>
-        </div>
-
-        {/* Live Controller Dashboard */}
-        <div className="flex flex-wrap items-center gap-4 justify-end w-full md:w-auto">
-          {/* Bluetooth Quick Status Icon */}
-          <div className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 px-2.5 py-1.5 rounded-lg text-xs" title="Status de conexão de controle Bluetooth">
-            <Bluetooth className={`w-3.5 h-3.5 ${btStatus === 'connected' ? 'text-emerald-500 animate-pulse' : 'text-zinc-500'}`} />
-            <span className={`text-[10px] font-semibold ${btStatus === 'connected' ? 'text-emerald-400' : 'text-zinc-400'}`}>
-              {btStatus === 'connected' ? 'Controle Pareado' : 'Sem Bluetooth'}
-            </span>
-          </div>
-
-          {/* Font Controls */}
-          <div className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 p-1.5 rounded-lg text-xs">
-            <Type className="w-4 h-4 text-zinc-500 ml-1.5" />
-            <button 
-              onClick={() => handleFontSizeChange(-4)}
-              className="px-2 py-1 hover:bg-zinc-800 rounded text-zinc-300 font-bold cursor-pointer"
-              title="Diminuir Letra"
-            >
-              A-
-            </button>
-            <span className="text-zinc-500 font-mono w-6 text-center">{fontSize}</span>
-            <button 
-              onClick={() => handleFontSizeChange(4)}
-              className="px-2 py-1 hover:bg-zinc-800 rounded text-zinc-300 font-bold cursor-pointer"
-              title="Aumentar Letra"
-            >
-              A+
-            </button>
-          </div>
-
-          {/* Case Format Selector */}
-          <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 p-1 rounded-lg text-xs" title="Formato da Caixa do Texto">
-            <button
-              type="button"
-              onClick={() => setTextCase('uppercase')}
-              className={`px-2 py-1 rounded text-[10px] font-bold font-mono tracking-wider transition-all cursor-pointer uppercase ${
-                textCase === 'uppercase'
-                  ? 'bg-amber-500 text-zinc-950 font-black'
-                  : 'text-zinc-400 hover:text-zinc-250 hover:bg-zinc-850'
-              }`}
-              title="Forçar tudo em LETRAS MAIÚSCULAS"
-            >
-              A/A
-            </button>
-            <button
-              type="button"
-              onClick={() => setTextCase('lowercase')}
-              className={`px-2 py-1 rounded text-[10px] font-bold font-mono tracking-wider transition-all cursor-pointer lowercase ${
-                textCase === 'lowercase'
-                  ? 'bg-amber-500 text-zinc-950 font-black'
-                  : 'text-zinc-400 hover:text-zinc-250 hover:bg-zinc-850'
-              }`}
-              title="Forçar tudo em letras minúsculas"
-            >
-              a/a
-            </button>
-            <button
-              type="button"
-              onClick={() => setTextCase('original')}
-              className={`px-2 py-1 rounded text-[10px] font-bold font-mono tracking-wider transition-all cursor-pointer ${
-                textCase === 'original'
-                  ? 'bg-amber-500 text-zinc-950 font-black'
-                  : 'text-zinc-400 hover:text-zinc-250 hover:bg-zinc-850'
-              }`}
-              title="Manter a escrita Original"
-            >
-              A/a
-            </button>
-          </div>
-
-          {/* Font Family Selector */}
-          <button
-            type="button"
-            onClick={() => setFontFamily(f => f === 'mono' ? 'sans' : 'mono')}
-            className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-805 px-3 py-1.5 rounded-lg text-xs hover:bg-zinc-850 text-zinc-300 cursor-pointer transition-colors"
-            title="Alternar estilo da fonte (Courier Mono vs Inter Sans)"
-          >
-            <span className="font-mono text-[10px] font-bold">ESTILO: {fontFamily === 'mono' ? 'COURIER' : 'INTER'}</span>
-          </button>
-
-          {/* Speed Indicator */}
-          <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs">
-            <span className="text-zinc-500">Velocidade:</span>
-            <span className="font-mono text-amber-500 font-bold text-sm w-4 tracking-tight">{speed}</span>
-            <div className="flex flex-col">
-              <button 
-                onClick={() => setSpeed(s => Math.min(s + 1, 10))}
-                className="hover:text-white cursor-pointer"
-              >
-                <ChevronUp className="w-3.5 h-3.5" />
-              </button>
-              <button 
-                onClick={() => setSpeed(s => Math.max(s - 1, 1))}
-                className="hover:text-white cursor-pointer"
-              >
-                <ChevronDown className="w-3.5 h-3.5" />
-              </button>
+      {isControlsVisible && (
+        <div className="flex flex-col md:flex-row items-center justify-between px-6 py-4 bg-[#0a0a14] border-b border-zinc-800/80 gap-4 transition-all duration-300">
+          <div className="flex items-center gap-3 w-full md:w-auto">
+            <div className="flex items-center justify-center p-2 bg-red-600 rounded-lg animate-pulse shrink-0">
+              <span className="text-[10px] font-bold text-white tracking-widest uppercase">PROMPTER LIVE</span>
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold tracking-wide font-display text-zinc-100 truncate">
+                {programTitle || "Programa sem Título"}
+              </h2>
+              <p className="text-[10px] text-zinc-400 mt-0.5 truncate">
+                Atalhos de teclado ativos. Compatível com passadores e controles Bluetooth.
+              </p>
             </div>
           </div>
 
-          {/* Mirror Flip Control */}
-          <button
-            onClick={() => setIsMirrored(m => !m)}
-            className={`p-2 rounded-lg border transition-colors cursor-pointer flex items-center gap-1 text-xs ${
-              isMirrored 
-                ? 'bg-amber-500 text-zinc-950 border-amber-400' 
-                : 'bg-zinc-900 text-zinc-300 border-zinc-800 hover:text-white'
-            }`}
-            title="Espelhar Horizontalmente (Para espelhos físicos de estúdio)"
-          >
-            <FlipHorizontal className="w-4 h-4" />
-            <span>Espelhar</span>
-          </button>
+          {/* Live Controller Dashboard */}
+          <div className="flex flex-wrap items-center gap-4 justify-end w-full md:w-auto">
+            {/* Bluetooth Quick Status Icon */}
+            <div className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 px-2.5 py-1.5 rounded-lg text-xs" title="Status de conexão de controle Bluetooth">
+              <Bluetooth className={`w-3.5 h-3.5 ${btStatus === 'connected' ? 'text-emerald-500 animate-pulse' : 'text-zinc-500'}`} />
+              <span className={`text-[10px] font-semibold ${btStatus === 'connected' ? 'text-emerald-400' : 'text-zinc-400'}`}>
+                {btStatus === 'connected' ? 'Controle Pareado' : 'Sem Bluetooth'}
+              </span>
+            </div>
 
-          {/* Core Teleprompter Controls */}
-          <div className="flex items-center gap-2 border-l border-zinc-850 pl-4">
+            {/* Font Controls */}
+            <div className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 p-1.5 rounded-lg text-xs">
+              <Type className="w-4 h-4 text-zinc-500 ml-1.5" />
+              <button 
+                onClick={() => handleFontSizeChange(-4)}
+                className="px-2 py-1 hover:bg-zinc-800 rounded text-zinc-300 font-bold cursor-pointer"
+                title="Diminuir Letra"
+              >
+                A-
+              </button>
+              <span className="text-zinc-500 font-mono w-6 text-center">{fontSize}</span>
+              <button 
+                onClick={() => handleFontSizeChange(4)}
+                className="px-2 py-1 hover:bg-zinc-800 rounded text-zinc-300 font-bold cursor-pointer"
+                title="Aumentar Letra"
+              >
+                A+
+              </button>
+            </div>
+
+            {/* Case Format Selector */}
+            <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 p-1 rounded-lg text-xs" title="Formato da Caixa do Texto">
+              <button
+                type="button"
+                onClick={() => setTextCase('uppercase')}
+                className={`px-2 py-1 rounded text-[10px] font-bold font-mono tracking-wider transition-all cursor-pointer uppercase ${
+                  textCase === 'uppercase'
+                    ? 'bg-amber-500 text-zinc-950 font-black'
+                    : 'text-zinc-400 hover:text-zinc-250 hover:bg-zinc-850'
+                }`}
+                title="Forçar tudo em LETRAS MAIÚSCULAS"
+              >
+                A/A
+              </button>
+              <button
+                type="button"
+                onClick={() => setTextCase('lowercase')}
+                className={`px-2 py-1 rounded text-[10px] font-bold font-mono tracking-wider transition-all cursor-pointer lowercase ${
+                  textCase === 'lowercase'
+                    ? 'bg-amber-500 text-zinc-950 font-black'
+                    : 'text-zinc-400 hover:text-zinc-250 hover:bg-zinc-850'
+                }`}
+                title="Forçar tudo em letras minúsculas"
+              >
+                a/a
+              </button>
+              <button
+                type="button"
+                onClick={() => setTextCase('original')}
+                className={`px-2 py-1 rounded text-[10px] font-bold font-mono tracking-wider transition-all cursor-pointer ${
+                  textCase === 'original'
+                    ? 'bg-amber-500 text-zinc-950 font-black'
+                    : 'text-zinc-400 hover:text-zinc-250 hover:bg-zinc-850'
+                }`}
+                title="Manter a escrita Original"
+              >
+                A/a
+              </button>
+            </div>
+
+            {/* Font Family Selector */}
             <button
-              onClick={handleReset}
-              className="p-2 hover:bg-zinc-850 rounded-lg text-zinc-300 hover:text-white transition-colors cursor-pointer"
-              title="Voltar ao início"
+              type="button"
+              onClick={() => setFontFamily(f => f === 'mono' ? 'sans' : 'mono')}
+              className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-805 px-3 py-1.5 rounded-lg text-xs hover:bg-zinc-850 text-zinc-300 cursor-pointer transition-colors"
+              title="Alternar estilo da fonte (Courier Mono vs Inter Sans)"
             >
-              <RotateCcw className="w-5 h-5" />
-            </button>
-            
-            <button
-              onClick={handlePrevLauda}
-              className="p-2 hover:bg-zinc-850 rounded-lg text-zinc-300 hover:text-white transition-colors cursor-pointer"
-              title="Lauda Anterior"
-            >
-              <ArrowLeft className="w-5 h-5" />
+              <span className="font-mono text-[10px] font-bold">ESTILO: {fontFamily === 'mono' ? 'COURIER' : 'INTER'}</span>
             </button>
 
+            {/* Speed Indicator */}
+            <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs">
+              <span className="text-zinc-500">Velocidade:</span>
+              <span className="font-mono text-amber-500 font-bold text-sm w-4 tracking-tight">{speed}</span>
+              <div className="flex flex-col">
+                <button 
+                  onClick={() => setSpeed(s => Math.min(s + 1, 15))}
+                  className="hover:text-white cursor-pointer"
+                >
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+                <button 
+                  onClick={() => setSpeed(s => Math.max(s - 1, 1))}
+                  className="hover:text-white cursor-pointer"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Mirror Flip Control */}
             <button
-              onClick={() => setIsPlaying(!isPlaying)}
-              className={`p-2.5 rounded-full transition-all active:scale-95 cursor-pointer ${
-                isPlaying 
-                  ? 'bg-amber-500 text-zinc-950 hover:bg-amber-400' 
-                  : 'bg-white text-zinc-950 hover:bg-zinc-200'
+              onClick={() => setIsMirrored(m => !m)}
+              className={`p-2 rounded-lg border transition-colors cursor-pointer flex items-center gap-1 text-xs ${
+                isMirrored 
+                  ? 'bg-amber-500 text-zinc-950 border-amber-400' 
+                  : 'bg-zinc-900 text-zinc-300 border-zinc-800 hover:text-white'
               }`}
-              title={isPlaying ? "Pausar" : "Iniciar Leitura"}
+              title="Espelhar Horizontalmente (Para espelhos físicos de estúdio)"
             >
-              {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+              <FlipHorizontal className="w-4 h-4" />
+              <span>Espelhar</span>
             </button>
 
+            {/* Core Teleprompter Controls */}
+            <div className="flex items-center gap-2 border-l border-zinc-850 pl-4">
+              <button
+                onClick={handleReset}
+                className="p-2 hover:bg-zinc-850 rounded-lg text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                title="Voltar ao início"
+              >
+                <RotateCcw className="w-5 h-5" />
+              </button>
+              
+              <button
+                onClick={handlePrevLauda}
+                className="p-2 hover:bg-zinc-850 rounded-lg text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                title="Lauda Anterior"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+
+              <button
+                onClick={() => setIsPlaying(!isPlaying)}
+                className={`p-2.5 rounded-full transition-all active:scale-95 cursor-pointer ${
+                  isPlaying 
+                    ? 'bg-amber-500 text-zinc-950 hover:bg-amber-400' 
+                    : 'bg-white text-zinc-950 hover:bg-zinc-200'
+                }`}
+                title={isPlaying ? "Pausar" : "Iniciar Leitura"}
+              >
+                {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+              </button>
+
+              <button
+                onClick={handleNextLauda}
+                className="p-2 hover:bg-zinc-850 rounded-lg text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                title="Próxima Lauda"
+              >
+                <ArrowRight className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Fullscreen Button */}
             <button
-              onClick={handleNextLauda}
-              className="p-2 hover:bg-zinc-850 rounded-lg text-zinc-300 hover:text-white transition-colors cursor-pointer"
-              title="Próxima Lauda"
+              onClick={toggleFullscreen}
+              className="p-2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider font-mono"
+              title={isFullscreen ? "Sair de Tela Cheia" : "Tela Cheia"}
             >
-              <ArrowRight className="w-5 h-5" />
+              {isFullscreen ? (
+                <>
+                  <Minimize className="w-4 h-4 text-amber-500" />
+                  <span className="hidden sm:inline">SAIR TELA CHEIA</span>
+                </>
+              ) : (
+                <>
+                  <Maximize className="w-4 h-4 text-amber-500" />
+                  <span className="hidden sm:inline">TELA CHEIA</span>
+                </>
+              )}
+            </button>
+
+            {/* Hide Panel Button */}
+            <button
+              onClick={() => setIsControlsVisible(false)}
+              className="p-2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider font-mono"
+              title="Ocultar Painel de Controles (Ideal para leitura)"
+            >
+              <ChevronUp className="w-4 h-4 text-amber-500" />
+              <span className="hidden sm:inline">OCULTAR</span>
+            </button>
+
+            {/* Settings Button */}
+            <button 
+              onClick={() => setIsSettingsOpen(true)}
+              className="p-2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+              title="Atalhos e Pareamento Bluetooth"
+            >
+              <Settings className="w-4.5 h-4.5" />
+            </button>
+
+            {/* Close trigger */}
+            <button
+              onClick={onClose}
+              className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
+            >
+              <X className="w-6 h-6" />
             </button>
           </div>
+        </div>
+      )}
 
-          {/* Settings Button */}
-          <button 
-            onClick={() => setIsSettingsOpen(true)}
-            className="p-2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
-            title="Atalhos e Pareamento Bluetooth"
+      {/* Floating Header when Controls are Hidden */}
+      {!isControlsVisible && (
+        <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
+          {/* Expanded Menu Toggle Button */}
+          <button
+            onClick={() => setIsControlsVisible(true)}
+            className="px-4 py-2.5 bg-zinc-950/95 hover:bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-amber-500 rounded-full text-[10px] font-bold tracking-widest uppercase font-mono shadow-xl transition-all duration-200 flex items-center gap-2 group cursor-pointer"
+            title="Mostrar Painel de Configurações"
           >
-            <Settings className="w-4.5 h-4.5" />
+            <ChevronDown className="w-4 h-4 text-amber-500 group-hover:translate-y-0.5 transition-transform" />
+            <span>EXIBIR CONTROLES</span>
           </button>
 
-          {/* Close trigger */}
+          {/* Direct Close Button */}
           <button
             onClick={onClose}
-            className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
+            className="p-2 bg-red-950/90 hover:bg-red-900 border border-red-900/40 rounded-full text-red-400 hover:text-white shadow-xl transition-colors cursor-pointer"
+            title="Fechar Teleprompter"
           >
-            <X className="w-6 h-6" />
+            <X className="w-5 h-5" />
           </button>
         </div>
-      </div>
+      )}
 
       {/* Primary Scroll Engine and Overlay */}
       <div className="relative flex-1 bg-[#020205] overflow-hidden flex justify-center">
@@ -616,7 +737,10 @@ export default function TeleprompterPlayer({
             fontSize: `${fontSize}px`,
             fontFamily: fontFamily === 'mono' ? "'Courier New', Courier, monospace" : "var(--font-sans), Inter, sans-serif",
             wordBreak: 'break-word',
-            overflowWrap: 'break-word'
+            overflowWrap: 'break-word',
+            willChange: 'scroll-position',
+            WebkitOverflowScrolling: 'touch',
+            scrollBehavior: 'auto'
           }}
         >
           {scriptsToRead.length === 0 ? (
@@ -710,7 +834,7 @@ export default function TeleprompterPlayer({
       {/* Settings Modal Overlay with Keyboard and Bluetooth Tabs */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 select-none">
-          <div className="bg-[#0c0c14] border border-zinc-800 rounded-2xl p-6 max-w-md w-full shadow-2xl relative overflow-hidden text-left flex flex-col">
+          <div className="bg-[#0c0c14] border border-zinc-800 rounded-2xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl relative text-left flex flex-col scrollbar-thin">
             <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-amber-500 to-indigo-600" />
             
             <div className="flex items-center justify-between mb-5">
@@ -806,199 +930,64 @@ export default function TeleprompterPlayer({
               </div>
             ) : (
               <div className="space-y-4">
-                {/* Connection Status Card */}
-                <div className="bg-zinc-950/60 p-4 border border-zinc-900 rounded-xl">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-2.5 h-2.5 rounded-full relative ${
-                        btStatus === 'connected' 
-                          ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]' 
-                          : btStatus === 'connecting'
-                            ? 'bg-amber-500 animate-pulse'
-                            : 'bg-zinc-600'
-                      }`} />
-                      <div>
-                        <p className="text-xs font-bold text-zinc-200">
-                          {btStatus === 'connected' 
-                            ? `Conectado: ${btDeviceName}` 
-                            : btStatus === 'connecting'
-                              ? 'Procurando dispositivos...'
-                              : 'Dispositivo Desconectado'
-                          }
-                        </p>
-                        <p className="text-[10px] text-zinc-500 mt-0.5">
-                          {btStatus === 'connected' 
-                            ? 'Bateria do controle: 94% | Pronto para uso' 
-                            : 'Pareie um dispositivo Bluetooth para sincronizar'
-                          }
-                        </p>
-                      </div>
-                    </div>
-                    {btStatus === 'connected' ? (
-                      <button
-                        onClick={() => {
-                          setBtStatus('disconnected');
-                          setBtDeviceName(null);
-                          setBtDevice(null);
-                        }}
-                        className="px-2.5 py-1 bg-red-950 text-red-400 border border-red-900/40 hover:bg-red-900 hover:text-white text-[10px] font-bold uppercase rounded-lg transition-colors cursor-pointer"
-                      >
-                        Desconectar
-                      </button>
-                    ) : (
-                      <button
-                        onClick={async () => {
-                          setBtStatus('connecting');
-                          setBtError(null);
-                          try {
-                            if (typeof navigator !== 'undefined' && (navigator as any).bluetooth) {
-                              const device = await (navigator as any).bluetooth.requestDevice({
-                                acceptAllDevices: true
-                              });
-                              setBtDeviceName(device.name || 'Dispositivo Bluetooth');
-                              setBtStatus('connected');
-                              setBtDevice(device);
-                            } else {
-                              throw new Error('Web Bluetooth não suportado pelo navegador.');
-                            }
-                          } catch (err: any) {
-                            console.warn("Bluetooth connection failed, using emulator setup instead:", err);
-                            setBtStatus('disconnected');
-                            setBtError(
-                              err.name === 'SecurityError'
-                                ? 'Permissão Bluetooth restrita no iframe. Use o Simulador Profissional abaixo para testar!'
-                                : 'Pareamento Bluetooth indisponível neste navegador. Use o Simulador abaixo!'
-                            );
-                          }
-                        }}
-                        className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-zinc-950 text-[10px] font-bold uppercase rounded-lg transition-all flex items-center gap-1 cursor-pointer"
-                      >
-                        <Bluetooth className="w-3.5 h-3.5" />
-                        Parear BT
-                      </button>
-                    )}
+                {/* Bluetooth Device Instructions */}
+                <div className="bg-[#101020]/70 border border-indigo-950/40 p-4 rounded-xl space-y-2.5">
+                  <div className="flex items-center gap-2 text-amber-400">
+                    <Bluetooth className="w-4 h-4" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider font-mono">Como Sincronizar seu Controle</span>
                   </div>
-
-                  {btError && (
-                    <div className="mt-3 p-2 bg-amber-950/20 border border-amber-900/30 rounded-lg text-amber-400 text-[10px] leading-relaxed">
-                      {btError}
-                    </div>
-                  )}
+                  <div className="text-[11px] text-zinc-400 leading-relaxed space-y-1.5">
+                    <p>
+                      1. Vá nas configurações do seu celular, tablet ou PC e <strong>pareie o controle via Bluetooth</strong>.
+                    </p>
+                    <p>
+                      2. Controles como anéis de rolagem, cliques de foto e passadores funcionam enviando teclas ou atalhos de mídia.
+                    </p>
+                    <p>
+                      3. Clique em <strong>"Vincular"</strong> na ação desejada abaixo e, em seguida, <strong>pressione o botão físico do controle</strong> para gravar!
+                    </p>
+                  </div>
                 </div>
 
-                {/* Simulated Bluetooth Selector */}
+                {/* Bluetooth Button Mapping section */}
                 <div className="border border-zinc-800/80 rounded-xl p-3 bg-[#0e0e1a]/40 space-y-3">
-                  <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest font-mono">
-                    Simulador e Seletor de Controles
-                  </h4>
-
-                  <div className="flex gap-2">
-                    <select
-                      value={selectedSimDevice}
-                      onChange={(e) => setSelectedSimDevice(e.target.value)}
-                      disabled={btStatus === 'connected'}
-                      className="flex-1 bg-zinc-950 border border-zinc-850 text-xs text-zinc-350 rounded-lg px-2.5 py-1.5 outline-none focus:border-amber-500 disabled:opacity-50"
-                    >
-                      {simulatedDevices.map(d => (
-                        <option key={d.id} value={d.id}>
-                          {d.name} ({d.battery})
-                        </option>
-                      ))}
-                    </select>
-
-                    {btStatus !== 'connected' && (
-                      <button
-                        onClick={() => {
-                          const dev = simulatedDevices.find(d => d.id === selectedSimDevice);
-                          if (dev) {
-                            setBtStatus('connected');
-                            setBtDeviceName(dev.name);
-                            setBtError(null);
-                          }
-                        }}
-                        className="px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white rounded-lg text-[10px] font-bold uppercase transition-all cursor-pointer"
-                      >
-                        Conectar
-                      </button>
-                    )}
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest font-mono">
+                      Vincular Botões do Controle
+                    </h4>
+                    <span className="text-[8px] bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded font-bold">CONFIGURAR</span>
                   </div>
-
-                  {/* Simulated physical 3D remote clicker control widget */}
-                  {btStatus === 'connected' && (
-                    <div className="pt-2 border-t border-zinc-900 space-y-2">
-                      <p className="text-[9px] text-zinc-500 uppercase tracking-widest font-mono font-bold text-center">
-                        Controle Remoto Pareado Ativo (Clique para testar)
-                      </p>
-                      
-                      <div className="flex justify-center py-1">
-                        <div className="bg-zinc-950 p-3 rounded-2xl border border-zinc-800 shadow-xl flex flex-col items-center gap-2.5 w-36">
-                          {/* Speed up button */}
+                  
+                  <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1 scrollbar-thin">
+                    {([
+                      { key: 'playPause', label: 'Play / Pause' },
+                      { key: 'speedUp', label: 'Aumentar Velocidade' },
+                      { key: 'speedDown', label: 'Diminuir Velocidade' },
+                      { key: 'scrollUp', label: 'Rolar para Cima' },
+                      { key: 'scrollDown', label: 'Rolar para Baixo' },
+                      { key: 'reset', label: 'Reiniciar' },
+                      { key: 'prevLauda', label: 'Lauda Anterior' },
+                      { key: 'nextLauda', label: 'Próxima Lauda' },
+                    ] as const).map((item) => {
+                      const isBinding = bindingAction === item.key;
+                      return (
+                        <div key={item.key} className="flex items-center justify-between p-1.5 bg-[#141424] border border-zinc-900 rounded-lg">
+                          <span className="text-[11px] font-medium text-zinc-300">{item.label}</span>
                           <button
-                            onClick={() => {
-                              setSpeed(s => Math.min(s + 1, 10));
-                              setLastReceivedSignal({
-                                key: 'Simulated_SpeedUp',
-                                action: 'Aumentar Velocidade',
-                                time: new Date().toLocaleTimeString()
-                              });
-                            }}
-                            className="w-8 h-8 bg-zinc-900 hover:bg-zinc-800 rounded-full border border-zinc-800 text-zinc-300 flex items-center justify-center font-bold text-sm active:scale-90 transition-all cursor-pointer"
-                            title="Aumentar Velocidade"
+                            type="button"
+                            onClick={() => setBindingAction(item.key)}
+                            className={`px-2.5 py-1 text-[9px] font-bold font-mono uppercase tracking-wider rounded border transition-all cursor-pointer ${
+                              isBinding 
+                                ? 'bg-amber-500 text-zinc-950 border-amber-400 animate-pulse font-extrabold' 
+                                : 'bg-zinc-900 text-zinc-350 border-zinc-850 hover:bg-zinc-800'
+                            }`}
                           >
-                            ▲
-                          </button>
-
-                          {/* Play/Pause Button */}
-                          <button
-                            onClick={() => {
-                              setIsPlaying(p => !p);
-                              setLastReceivedSignal({
-                                key: 'Simulated_PlayPause',
-                                action: 'Play / Pause',
-                                time: new Date().toLocaleTimeString()
-                              });
-                            }}
-                            className="w-10 h-10 bg-amber-500 hover:bg-amber-400 text-zinc-950 rounded-full flex items-center justify-center font-bold shadow-md shadow-amber-500/20 active:scale-90 transition-all cursor-pointer"
-                            title="Play / Pause"
-                          >
-                            {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
-                          </button>
-
-                          {/* Speed down button */}
-                          <button
-                            onClick={() => {
-                              setSpeed(s => Math.max(s - 1, 1));
-                              setLastReceivedSignal({
-                                key: 'Simulated_SpeedDown',
-                                action: 'Diminuir Velocidade',
-                                time: new Date().toLocaleTimeString()
-                              });
-                            }}
-                            className="w-8 h-8 bg-zinc-900 hover:bg-zinc-800 rounded-full border border-zinc-800 text-zinc-300 flex items-center justify-center font-bold text-sm active:scale-90 transition-all cursor-pointer"
-                            title="Diminuir Velocidade"
-                          >
-                            ▼
-                          </button>
-
-                          {/* Reset Button */}
-                          <button
-                            onClick={() => {
-                              handleReset();
-                              setLastReceivedSignal({
-                                key: 'Simulated_Reset',
-                                action: 'Reiniciar',
-                                time: new Date().toLocaleTimeString()
-                              });
-                            }}
-                            className="px-2 py-0.5 bg-zinc-900 hover:bg-zinc-800 text-[8px] font-bold uppercase text-zinc-400 border border-zinc-850 rounded-md active:scale-95 transition-all cursor-pointer"
-                            title="Voltar ao início"
-                          >
-                            Reiniciar
+                            {isBinding ? 'Aperte o botão...' : getFriendlyKeyName(shortcuts[item.key])}
                           </button>
                         </div>
-                      </div>
-                    </div>
-                  )}
+                      );
+                    })}
+                  </div>
                 </div>
 
                 {/* Live Signal Monitor */}
@@ -1031,7 +1020,7 @@ export default function TeleprompterPlayer({
                     </div>
                   ) : (
                     <p className="text-zinc-500 text-[11px] italic text-center py-1.5">
-                      Pressione teclas no controle ou simule cliques para ver os sinais...
+                      Pressione teclas ou botões no seu controle pareado para ver os sinais...
                     </p>
                   )}
                 </div>

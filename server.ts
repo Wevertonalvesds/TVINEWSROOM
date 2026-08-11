@@ -9,6 +9,72 @@ import { initializeApp } from "firebase/app";
 import { getFirestore, collection, getDocs, doc, getDoc, setDoc } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword } from "firebase/auth";
 import firebaseConfig from "./firebase-applet-config.json";
+import { google } from "googleapis";
+
+// Robust parser and formatter for Google Service Account credentials
+function parseServiceAccountCredentials() {
+  let email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
+  let privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || "";
+
+  // Helper to trim both single and double quotes and whitespace recursively
+  const trimQuotes = (str: string): string => {
+    str = str.trim();
+    while ((str.startsWith('"') && str.endsWith('"')) || 
+           (str.startsWith("'") && str.endsWith("'"))) {
+      str = str.substring(1, str.length - 1).trim();
+    }
+    return str;
+  };
+
+  email = trimQuotes(email);
+  privateKey = trimQuotes(privateKey);
+
+  // If the user pasted the entire Service Account JSON into either variable, parse it!
+  try {
+    if (privateKey.startsWith("{") || privateKey.startsWith("[")) {
+      const parsed = JSON.parse(privateKey);
+      if (parsed.private_key) privateKey = parsed.private_key;
+      if (parsed.client_email && !email) email = parsed.client_email;
+    }
+  } catch (e) {}
+
+  try {
+    if (email.startsWith("{") || email.startsWith("[")) {
+      const parsed = JSON.parse(email);
+      if (parsed.client_email) email = parsed.client_email;
+      if (parsed.private_key && !privateKey) privateKey = parsed.private_key;
+    }
+  } catch (e) {}
+
+  email = trimQuotes(email);
+  privateKey = trimQuotes(privateKey);
+
+  // Replace escaped newlines
+  if (privateKey.includes("\\n")) {
+    privateKey = privateKey.replace(/\\n/g, "\n");
+  }
+
+  return { email, privateKey };
+}
+
+// Google Service Account auth client generator
+function getGoogleDriveClient() {
+  const { email, privateKey } = parseServiceAccountCredentials();
+
+  if (!email || !privateKey) {
+    throw new Error(
+      "Credenciais do Google Service Account não configuradas. Por favor, defina GOOGLE_SERVICE_ACCOUNT_EMAIL e GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY nos Secrets do projeto."
+    );
+  }
+
+  const auth = new google.auth.JWT({
+    email,
+    key: privateKey,
+    scopes: ["https://www.googleapis.com/auth/drive"]
+  });
+
+  return google.drive({ version: "v3", auth });
+}
 
 // Initialize Firebase for server-side integration APIs
 const firebaseApp = initializeApp({
@@ -19,7 +85,7 @@ const firebaseApp = initializeApp({
   messagingSenderId: firebaseConfig.messagingSenderId,
   appId: firebaseConfig.appId,
 });
-const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId || "(default)");
+const db = getFirestore(firebaseApp, (firebaseConfig as any).firestoreDatabaseId || "(default)");
 const auth = getAuth(firebaseApp);
 
 function generateSecureToken(): string {
@@ -208,6 +274,176 @@ async function startServer() {
     } catch (err: any) {
       console.error('API local upload error:', err);
       res.status(500).json({ success: false, error: err.message || 'Falha no upload do arquivo' });
+    }
+  });
+
+  // Google Drive Direct Upload Endpoint (No User Google Login required, utilizes Service Account)
+  app.post('/api/drive/upload-direct', upload.single('file'), async (req, res) => {
+    let tempFilePath = req.file?.path;
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, error: 'Nenhum arquivo enviado.' });
+      }
+
+      // 10. SEGURANÇA: Validations
+      const allowedExtensions = ['.mp4', '.mov', '.avi', '.mkv', '.mp3', '.wav', '.m4v', '.webm'];
+      const ext = path.extname(req.file.originalname).toLowerCase();
+      if (!allowedExtensions.includes(ext)) {
+        if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+        return res.status(400).json({ success: false, error: 'Formato de arquivo não suportado. Use MP4, MOV, AVI, MKV, MP3 ou WAV.' });
+      }
+
+      // Check max file size (1.5GB)
+      const maxSize = 1500 * 1024 * 1024;
+      if (req.file.size > maxSize) {
+        if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+        return res.status(400).json({ success: false, error: 'O tamanho do arquivo excede o limite permitido de 1.5GB.' });
+      }
+
+      // Check credentials exist
+      const drive = getGoogleDriveClient();
+      const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || '1jCABUF0YtmD6OWCyIsv-KYtNzep8z7wn';
+
+      // Stream upload directly to Google Drive folder
+      const driveResponse = await drive.files.create({
+        supportsAllDrives: true,
+        requestBody: {
+          name: req.file.originalname,
+          parents: [folderId],
+        },
+        media: {
+          mimeType: req.file.mimetype,
+          body: fs.createReadStream(tempFilePath),
+        },
+        fields: 'id, name, mimeType, size, webViewLink, webContentLink',
+      });
+
+      const fileData = driveResponse.data;
+
+      if (!fileData.id) {
+        throw new Error('Falha ao obter ID do arquivo criado no Google Drive.');
+      }
+
+      // Delete the local temporary file immediately after successful upload
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+        tempFilePath = undefined;
+      }
+
+      const webViewLink = fileData.webViewLink || `https://drive.google.com/file/d/${fileData.id}/view?usp=drivesdk`;
+      const webContentLink = fileData.webContentLink || `https://drive.google.com/uc?export=download&id=${fileData.id}`;
+
+      // Save metadata registry to Firestore (google_drive_uploads collection)
+      const uploadMetadata = {
+        fileId: fileData.id,
+        fileName: fileData.name || req.file.originalname,
+        mimeType: fileData.mimeType || req.file.mimetype,
+        size: fileData.size || String(req.file.size),
+        webViewLink,
+        webContentLink,
+        driveFolderId: folderId,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: req.body.uploadedBy || 'Sistema',
+        storageProvider: "google_drive"
+      };
+
+      try {
+        await setDoc(doc(db, "google_drive_uploads", fileData.id), uploadMetadata);
+      } catch (dbErr) {
+        console.error("Erro ao salvar metadados do upload no Firestore:", dbErr);
+      }
+
+      res.json({
+        success: true,
+        fileId: fileData.id,
+        fileName: fileData.name || req.file.originalname,
+        mimeType: fileData.mimeType || req.file.mimetype,
+        size: fileData.size || String(req.file.size),
+        webViewLink,
+        webContentLink
+      });
+
+    } catch (err: any) {
+      console.error('API Direct Upload to Drive error:', err);
+      // Clean up local temp file on error
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        try { fs.unlinkSync(tempFilePath); } catch (e) {}
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: err.message || 'Falha ao processar o upload no Google Drive.' 
+      });
+    }
+  });
+
+  // Google Drive Token Generation Endpoint (Returns Service Account access token for direct upload)
+  app.get('/api/drive/token', async (req, res) => {
+    try {
+      const { email, privateKey } = parseServiceAccountCredentials();
+
+      if (!email || !privateKey) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Credenciais do Google Service Account não configuradas. Por favor, defina GOOGLE_SERVICE_ACCOUNT_EMAIL e GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY nos Secrets do projeto." 
+        });
+      }
+
+      const auth = new google.auth.JWT({
+        email,
+        key: privateKey,
+        scopes: ["https://www.googleapis.com/auth/drive"]
+      });
+
+      const tokenResponse = await auth.getAccessToken();
+      const token = tokenResponse.token;
+
+      if (!token) {
+        throw new Error("Não foi possível gerar o token de acesso da Service Account.");
+      }
+
+      res.json({
+        success: true,
+        token: token,
+        folderId: process.env.GOOGLE_DRIVE_FOLDER_ID || '1jCABUF0YtmD6OWCyIsv-KYtNzep8z7wn'
+      });
+    } catch (err: any) {
+      console.error('API drive token error:', err);
+      res.status(500).json({ success: false, error: err.message || 'Falha ao gerar o token para o Google Drive.' });
+    }
+  });
+
+  // Register Metadata for Direct Client-side Service Account Uploads
+  app.post('/api/drive/register-upload', async (req, res) => {
+    try {
+      const { fileId, fileName, mimeType, size, webViewLink, webContentLink, uploadedBy } = req.body;
+      if (!fileId) {
+        return res.status(400).json({ success: false, error: 'ID do arquivo é obrigatório.' });
+      }
+
+      const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || '1jCABUF0YtmD6OWCyIsv-KYtNzep8z7wn';
+      const uploadMetadata = {
+        fileId,
+        fileName: fileName || 'Sem título',
+        mimeType: mimeType || 'video/mp4',
+        size: String(size || '0'),
+        webViewLink: webViewLink || `https://drive.google.com/file/d/${fileId}/view?usp=drivesdk`,
+        webContentLink: webContentLink || `https://drive.google.com/uc?export=download&id=${fileId}`,
+        driveFolderId: folderId,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: uploadedBy || 'Sistema',
+        storageProvider: "google_drive"
+      };
+
+      try {
+        await setDoc(doc(db, "google_drive_uploads", fileId), uploadMetadata);
+      } catch (dbErr) {
+        console.error("Erro ao salvar metadados do upload no Firestore:", dbErr);
+      }
+
+      res.json({ success: true, ...uploadMetadata });
+    } catch (err: any) {
+      console.error('API register-upload error:', err);
+      res.status(500).json({ success: false, error: err.message || 'Falha ao registrar metadados do upload.' });
     }
   });
 

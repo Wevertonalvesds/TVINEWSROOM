@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, Search, Calendar, MapPin, Phone, RefreshCw, Trash2, Edit2, X, ClipboardList, Clock, Info, CheckCircle2, AlertCircle, Printer } from 'lucide-react';
+import { 
+  Plus, Search, Calendar, MapPin, Phone, RefreshCw, Trash2, 
+  Edit2, X, Clock, CheckCircle2, AlertCircle, Printer, Sparkles 
+} from 'lucide-react';
 import { Agenda } from '../types';
-import { db, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, where, serverTimestamp, onSnapshot } from '../firebase';
+import { db, collection, addDoc, updateDoc, deleteDoc, doc, query, serverTimestamp, onSnapshot } from '../firebase';
 import { User } from 'firebase/auth';
 // @ts-ignore
 import logoCor from '../../assets/.aistudio/logo cor.png';
@@ -12,16 +15,28 @@ interface AgendasTabProps {
   currentUser: User | null;
 }
 
+const getInitialFormData = () => ({
+  evento: '',
+  dataHora: new Date().toISOString().slice(0, 16),
+  local: '',
+  contato: '',
+  descricao: ''
+});
+
 export default function AgendasTab({ currentUser }: AgendasTabProps) {
   const [agendas, setAgendas] = useState<Agenda[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [timeFilter, setTimeFilter] = useState<'ativos' | 'todos' | 'hoje'>('ativos');
-  const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const [editingAgenda, setEditingAgenda] = useState<Agenda | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [printItem, setPrintItem] = useState<Agenda | null>(null);
 
+  // Form State
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [formData, setFormData] = useState(getInitialFormData());
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
+  // Print Handling
   useEffect(() => {
     if (printItem) {
       document.body.classList.add('printing-item');
@@ -49,68 +64,6 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
     }
   }, [printItem]);
 
-  // Form states
-  const [evento, setEvento] = useState('');
-  const [dataHora, setDataHora] = useState('');
-  const [local, setLocal] = useState('');
-  const [contato, setContato] = useState('');
-  const [descricao, setDescricao] = useState('');
-
-  const [isAiLoading, setIsAiLoading] = useState(false);
-
-  const handleAiGenerateQuestions = async () => {
-    if (!evento.trim()) return;
-    setIsAiLoading(true);
-    try {
-      const response = await fetch('/api/ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'generate-questions',
-          theme: evento,
-          context: descricao
-        })
-      });
-      const data = await response.json();
-      if (data.success && data.result) {
-        setDescricao(prev => prev ? `${prev}\n\n---\n\n### Perguntas para Entrevista Sugeridas pela IA\n${data.result}` : data.result);
-      } else {
-        alert(data.error || 'Erro ao gerar perguntas com IA.');
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Erro de rede ao falar com a IA.');
-    } finally {
-      setIsAiLoading(false);
-    }
-  };
-
-  const handleAiFixGrammar = async () => {
-    if (!descricao.trim()) return;
-    setIsAiLoading(true);
-    try {
-      const response = await fetch('/api/ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'fix-grammar',
-          text: descricao
-        })
-      });
-      const data = await response.json();
-      if (data.success && data.result) {
-        setDescricao(data.result);
-      } else {
-        alert(data.error || 'Erro ao corrigir ortografia com IA.');
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Erro de rede ao falar com a IA.');
-    } finally {
-      setIsAiLoading(false);
-    }
-  };
-
   const LOCAL_AGE_KEY = 'rede_tvi_agendas_v1';
 
   // Load from local or cloud with real-time sync
@@ -136,11 +89,32 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
       return;
     }
 
-    const q = query(
-      collection(db, 'agendas')
-    );
+    const q = query(collection(db, 'agendas'));
 
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      // If the cloud is completely empty, but the local storage has offline data,
+      // upload/migrate the local data to the cloud first so it persists instead of being wiped out!
+      if (querySnapshot.empty && loadedAge.length > 0) {
+        console.log('Sincronizador: Nuvem vazia para "agendas", migrando cache local para a nuvem...');
+        loadedAge.forEach(async (age) => {
+          try {
+            await addDoc(collection(db, 'agendas'), {
+              evento: age.evento,
+              dataHora: age.dataHora,
+              local: age.local,
+              contato: age.contato,
+              descricao: age.descricao,
+              userId: currentUser.uid,
+              createdAt: age.createdAt || new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            });
+          } catch (uploadErr) {
+            console.error('Erro ao migrar agenda local para a nuvem:', uploadErr);
+          }
+        });
+        return;
+      }
+
       const cloudAge: Agenda[] = [];
       querySnapshot.forEach((docSnap) => {
         const d = docSnap.data();
@@ -177,8 +151,29 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
     setTimeout(() => setIsLoading(false), 300);
   };
 
+  const updateField = (field: keyof typeof formData, value: string) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleEdit = (a: Agenda) => {
+    setEditingId(a.id);
+    setFormData({
+      evento: a.evento,
+      dataHora: a.dataHora,
+      local: a.local,
+      contato: a.contato,
+      descricao: a.descricao
+    });
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setFormData(getInitialFormData());
+  };
+
   const handleCreateOrUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
+    const { evento, dataHora, local, contato, descricao } = formData;
     if (!evento.trim() || !dataHora) return;
 
     setSyncStatus('saving');
@@ -194,23 +189,25 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
     };
 
     let updatedList = [...agendas];
-
     const isCloudUser = currentUser && currentUser.uid !== 'espelho-rede-tvi-master' && currentUser.uid !== 'offline-editor';
 
     try {
-      if (editingAgenda) {
+      if (editingId) {
+        // Edit Mode
         const updatedAge: Agenda = {
-          ...editingAgenda,
+          id: editingId,
           ...agendaData,
+          createdAt: agendas.find(a => a.id === editingId)?.createdAt || now,
         } as Agenda;
 
         if (isCloudUser) {
-          const docRef = doc(db, 'agendas', editingAgenda.id);
+          const docRef = doc(db, 'agendas', editingId);
           await updateDoc(docRef, { ...agendaData, updatedAt: serverTimestamp() });
         }
 
-        updatedList = agendas.map(a => a.id === editingAgenda.id ? updatedAge : a);
+        updatedList = agendas.map(a => a.id === editingId ? updatedAge : a);
       } else {
+        // Create Mode
         const tempId = Math.random().toString(36).substring(2, 9);
         const newAge: Agenda = {
           id: tempId,
@@ -234,13 +231,13 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
       updatedList.sort((a, b) => new Date(a.dataHora).getTime() - new Date(b.dataHora).getTime());
 
       setAgendas(updatedList);
-      
-      // Always save a local backup copy in localStorage
       localStorage.setItem(LOCAL_AGE_KEY, JSON.stringify(updatedList));
       
       setSyncStatus('success');
       setTimeout(() => setSyncStatus('idle'), 2050);
-      closeEditor();
+      
+      // Clean form inputs automatically upon save/create
+      handleCancelEdit();
     } catch (err) {
       console.error('Error saving agenda event:', err);
       setSyncStatus('error');
@@ -253,8 +250,6 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
 
     const remaining = agendas.filter(a => a.id !== id);
     setAgendas(remaining);
-    
-    // Save updated backup copy in localStorage
     localStorage.setItem(LOCAL_AGE_KEY, JSON.stringify(remaining));
 
     const isCloudUser = currentUser && currentUser.uid !== 'espelho-rede-tvi-master' && currentUser.uid !== 'offline-editor';
@@ -265,33 +260,66 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
         console.error('Firestore delete agenda error:', err);
       }
     }
+
+    if (editingId === id) {
+      handleCancelEdit();
+    }
   };
 
-  const openNewEditor = () => {
-    setEditingAgenda(null);
-    setEvento('');
-    // Default format "YYYY-MM-DDTHH:MM"
-    const nowStr = new Date().toISOString().slice(0, 16);
-    setDataHora(nowStr);
-    setLocal('');
-    setContato('');
-    setDescricao('');
-    setIsEditorOpen(true);
+  // AI Helper: Interview Questions
+  const handleAiGenerateQuestions = async (currentTheme: string, currentDesc: string) => {
+    if (!currentTheme.trim()) return;
+    setIsAiLoading(true);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'generate-questions',
+          theme: currentTheme,
+          context: currentDesc
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.result) {
+        const appended = currentDesc ? `${currentDesc}\n\n---\n\n### Perguntas para Entrevista Sugeridas pela IA\n${data.result}` : data.result;
+        updateField('descricao', appended);
+      } else {
+        alert(data.error || 'Erro ao gerar perguntas com IA.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro de rede ao falar com a IA.');
+    } finally {
+      setIsAiLoading(false);
+    }
   };
 
-  const openEditEditor = (a: Agenda) => {
-    setEditingAgenda(a);
-    setEvento(a.evento);
-    setDataHora(a.dataHora);
-    setLocal(a.local);
-    setContato(a.contato);
-    setDescricao(a.descricao);
-    setIsEditorOpen(true);
-  };
-
-  const closeEditor = () => {
-    setIsEditorOpen(false);
-    setEditingAgenda(null);
+  // AI Helper: Grammar Fix
+  const handleAiFixGrammar = async (currentText: string) => {
+    if (!currentText.trim()) return;
+    setIsAiLoading(true);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'fix-grammar',
+          text: currentText
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.result) {
+        updateField('descricao', data.result);
+      } else {
+        alert(data.error || 'Erro ao corrigir ortografia com IA.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro de rede ao falar com a IA.');
+    } finally {
+      setIsAiLoading(false);
+    }
   };
 
   // Helper status calculation
@@ -299,7 +327,6 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
     const eventTime = new Date(dateTimeStr).getTime();
     const todayStart = new Date().setHours(0, 0, 0, 0);
     const todayEnd = new Date().setHours(23, 59, 59, 999);
-    const timeNow = new Date().getTime();
 
     if (eventTime >= todayStart && eventTime <= todayEnd) {
       return { label: 'HOJE', color: 'bg-amber-500/20 text-amber-400 border border-amber-500/30' };
@@ -330,330 +357,326 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
 
   return (
     <div id="agendas-panel" className="space-y-6">
+      
+      {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
+        <div className="text-left">
+          <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2 font-display">
             <Calendar className="w-5 h-5 text-amber-500" />
             Agenda de Eventos
           </h2>
           <p className="text-xs text-zinc-400 mt-1">
-            Planejamento diário e monitoramento de compromissos jornalísticos e pautas.
+            Planejamento diário, escalas de estúdio e monitoramento de compromissos jornalísticos em tempo real.
           </p>
         </div>
-        <button
-          onClick={openNewEditor}
-          className="px-4 py-2 bg-amber-500 hover:bg-amber-440 active:scale-95 text-zinc-950 text-xs font-extrabold uppercase tracking-wide rounded-xl transition-all shadow-md select-none flex items-center justify-center gap-1.5 self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4 stroke-[2.5]" />
-          Novo Evento
-        </button>
       </div>
 
-      {/* Row settings */}
-      <div className="flex flex-col md:flex-row gap-3">
-        {/* Search */}
-        <div className="relative flex-1">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Buscar por evento, local, contato..."
-            className="w-full bg-[#111113]/60 border border-zinc-800 text-xs px-10 py-2.5 rounded-xl text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500"
-          />
-        </div>
+      {/* Main Grid Layout: Side-by-Side Unified Workspace */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        
+        {/* Left Side: Event List (Col Span 7) */}
+        <div className="lg:col-span-7 space-y-6">
+          
+          {/* Row settings and filters */}
+          <div className="flex flex-col md:flex-row gap-3">
+            {/* Search */}
+            <div className="relative flex-1">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Buscar por evento, local, contato..."
+                className="w-full bg-[#111113]/60 border border-zinc-800 text-xs px-10 py-2.5 rounded-xl text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 font-sans"
+              />
+            </div>
 
-        {/* Time Filters */}
-        <div className="flex bg-zinc-950 border border-zinc-850 p-1 rounded-xl scrollbar-none overflow-x-auto text-[11px] font-bold">
-          {([
-            { key: 'ativos', label: 'Futuros e Hoje' },
-            { key: 'hoje', label: 'Hoje' },
-            { key: 'todos', label: 'Ver Todos' }
-          ] as const).map((item) => (
+            {/* Time Filters */}
+            <div className="flex bg-zinc-950 border border-zinc-850 p-1 rounded-xl scrollbar-none overflow-x-auto text-[11px] font-bold">
+              {([
+                { key: 'ativos', label: 'Futuros e Hoje' },
+                { key: 'hoje', label: 'Hoje' },
+                { key: 'todos', label: 'Ver Todos' }
+              ] as const).map((item) => (
+                <button
+                  key={item.key}
+                  onClick={() => setTimeFilter(item.key)}
+                  className={`px-4 py-1.5 rounded-lg uppercase tracking-wider transition-colors shrink-0 cursor-pointer ${
+                    timeFilter === item.key
+                      ? 'bg-amber-500 text-zinc-950'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
             <button
-              key={item.key}
-              onClick={() => setTimeFilter(item.key)}
-              className={`px-4 py-1.5 rounded-lg uppercase tracking-wider transition-colors shrink-0 ${
-                timeFilter === item.key
-                  ? 'bg-amber-500 text-zinc-950'
-                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
-              }`}
+              onClick={loadAgendas}
+              className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-400 hover:text-zinc-200 rounded-xl transition-all flex items-center justify-center gap-1.5 text-xs shrink-0 cursor-pointer"
+              title="Recarregar"
             >
-              {item.label}
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
-          ))}
-        </div>
-
-        <button
-          onClick={loadAgendas}
-          className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-400 hover:text-zinc-205 rounded-xl transition-all flex items-center justify-center gap-1.5 text-xs shrink-0"
-          title="Recarregar"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
-
-      {/* List Layout */}
-      {isLoading ? (
-        <div className="py-20 text-center text-zinc-500 text-xs font-mono uppercase tracking-wider animate-pulse flex items-center justify-center gap-2">
-          <RefreshCw className="w-4 h-4 animate-spin text-amber-500" />
-          Carregando Agenda...
-        </div>
-      ) : filteredAgendas.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-zinc-800 bg-[#0f0f11]/20 p-12 text-center max-w-xl mx-auto my-4 space-y-4">
-          <Calendar className="mx-auto w-10 h-10 text-zinc-600 stroke-[1.5]" />
-          <div className="space-y-1">
-            <h4 className="text-zinc-355 font-bold text-sm">Nenhum evento agendado</h4>
-            <p className="text-zinc-555 text-xs max-w-xs mx-auto">
-              {searchQuery
-                ? 'Nenhum resultado corresponde à busca.'
-                : 'Cadastre eventos jornalísticos, coletivas de imprensa ou transmissões para organizar a equipe neste painel.'}
-            </p>
           </div>
-          {!searchQuery && (
-            <button
-              onClick={openNewEditor}
-              className="px-4 py-1.5 bg-zinc-900 hover:bg-zinc-855 border border-zinc-800 text-zinc-300 hover:text-white rounded-lg text-xs font-bold font-mono uppercase tracking-wider"
-            >
-              Agendar Compromisso
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2.5">
-          {filteredAgendas.map((age) => {
-            const statusStyle = getEventStatus(age.dataHora);
-            const dateObj = new Date(age.dataHora);
-            const formattedDate = dateObj.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-            const formattedTime = dateObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
-            return (
-              <motion.div
-                layout
-                key={age.id}
-                className="bg-[#121214] border border-zinc-850/50 hover:border-zinc-755 hover:bg-[#161619] rounded-xl p-3.5 flex flex-col md:flex-row md:items-center md:justify-between gap-4 transition-all group relative"
-              >
-                {/* Left side: status badge, date & time, event title */}
-                <div className="flex-1 min-w-0 space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-mono font-bold tracking-wider ${statusStyle.color}`}>
-                      {statusStyle.label}
-                    </span>
-                    <span className="text-zinc-700 font-mono text-xs">•</span>
-                    <span className="text-zinc-400 text-[10px] font-mono flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5 text-zinc-500" />
-                      {formattedTime}h • {formattedDate}
-                    </span>
-                    {age.local && (
-                      <>
-                        <span className="text-zinc-700 font-mono text-xs">•</span>
-                        <span className="text-zinc-400 text-[10px] font-mono flex items-center gap-1 uppercase tracking-wider">
-                          <MapPin className="w-3 h-3 text-zinc-550 shrink-0" />
-                          {age.local}
+          {/* List Layout */}
+          {isLoading ? (
+            <div className="py-20 text-center text-zinc-500 text-xs font-mono uppercase tracking-wider animate-pulse flex items-center justify-center gap-2">
+              <RefreshCw className="w-4 h-4 animate-spin text-amber-500" />
+              Carregando Agenda...
+            </div>
+          ) : filteredAgendas.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-zinc-800 bg-[#0f0f11]/20 p-12 text-center my-4 space-y-4">
+              <Calendar className="mx-auto w-10 h-10 text-zinc-600 stroke-[1.5]" />
+              <div className="space-y-1">
+                <h4 className="text-zinc-300 font-bold text-sm">Nenhum evento agendado</h4>
+                <p className="text-zinc-500 text-xs max-w-xs mx-auto leading-relaxed">
+                  {searchQuery
+                    ? 'Nenhum resultado corresponde à busca.'
+                    : 'Cadastre eventos jornalísticos, coletivas de imprensa ou transmissões para organizar a equipe neste painel.'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2.5">
+              {filteredAgendas.map((age) => {
+                const statusStyle = getEventStatus(age.dataHora);
+                const dateObj = new Date(age.dataHora);
+                const formattedDate = dateObj.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                const formattedTime = dateObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+                return (
+                  <motion.div
+                    layout
+                    key={age.id}
+                    className={`bg-transparent border-b border-zinc-850/50 hover:bg-[#111113]/30 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4 transition-all group relative text-left ${
+                      editingId === age.id ? 'border-l-2 border-l-amber-500 pl-3 bg-amber-500/[0.02]' : ''
+                    }`}
+                  >
+                    {/* Left side: status badge, date & time, event title */}
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-mono font-bold tracking-wider ${statusStyle.color}`}>
+                          {statusStyle.label}
                         </span>
-                      </>
-                    )}
-                    {age.contato && (
-                      <>
                         <span className="text-zinc-700 font-mono text-xs">•</span>
                         <span className="text-zinc-400 text-[10px] font-mono flex items-center gap-1">
-                          <Phone className="w-3 h-3 text-zinc-500" />
-                          {age.contato}
+                          <Clock className="w-3.5 h-3.5 text-zinc-500" />
+                          {formattedTime}h • {formattedDate}
                         </span>
-                      </>
-                    )}
-                  </div>
+                        {age.local && (
+                          <>
+                            <span className="text-zinc-700 font-mono text-xs">•</span>
+                            <span className="text-zinc-400 text-[10px] font-mono flex items-center gap-1 uppercase tracking-wider">
+                              <MapPin className="w-3 h-3 text-zinc-500 shrink-0" />
+                              {age.local}
+                            </span>
+                          </>
+                        )}
+                        {age.contato && (
+                          <>
+                            <span className="text-zinc-700 font-mono text-xs">•</span>
+                            <span className="text-zinc-400 text-[10px] font-mono flex items-center gap-1">
+                              <Phone className="w-3 h-3 text-zinc-500" />
+                              {age.contato}
+                            </span>
+                          </>
+                        )}
+                      </div>
 
-                  <div className="min-w-0">
-                    <h3 className="text-sm font-bold text-zinc-200 font-sans group-hover:text-amber-500/90 transition-colors">
-                      {age.evento}
-                    </h3>
-                    {age.descricao && (
-                      <p className="text-xs text-zinc-400 font-sans mt-0.5 line-clamp-1">
-                        {age.descricao}
-                      </p>
-                    )}
-                  </div>
-                </div>
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-bold text-zinc-200 font-sans group-hover:text-amber-500/90 transition-colors">
+                          {age.evento}
+                        </h3>
+                        {age.descricao && (
+                          <p className="text-xs text-zinc-400 font-sans mt-0.5 line-clamp-1">
+                            {age.descricao}
+                          </p>
+                        )}
+                      </div>
+                    </div>
 
-                {/* Right side: Action row */}
-                <div className="flex items-center gap-2 shrink-0 self-end md:self-auto pt-3.5 md:pt-0 border-t md:border-none border-zinc-850/40">
-                  <button
-                    onClick={() => setPrintItem(age)}
-                    className="p-1.5 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 hover:text-amber-400 rounded-lg transition-colors border border-zinc-850 cursor-pointer"
-                    title="Imprimir Compromisso"
-                  >
-                    <Printer className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => openEditEditor(age)}
-                    className="p-1.5 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 hover:text-amber-400 rounded-lg transition-colors border border-zinc-850"
-                    title="Editar Compromisso"
-                  >
-                    <Edit2 className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(age.id)}
-                    className="p-1.5 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 hover:text-red-400 rounded-lg transition-colors border border-zinc-850"
-                    title="Excluir Compromisso"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </motion.div>
-            );
-          })}
+                    {/* Right side: Action row */}
+                    <div className="flex items-center gap-2 shrink-0 self-end md:self-auto pt-3.5 md:pt-0 border-t md:border-none border-zinc-850/40">
+                      <button
+                        onClick={() => setPrintItem(age)}
+                        className="p-1.5 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 hover:text-amber-400 rounded-lg transition-colors border border-zinc-850 cursor-pointer"
+                        title="Imprimir Compromisso"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleEdit(age)}
+                        className="p-1.5 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 hover:text-amber-400 rounded-lg transition-colors border border-zinc-850 cursor-pointer"
+                        title="Editar Compromisso"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(age.id)}
+                        className="p-1.5 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 hover:text-red-400 rounded-lg transition-colors border border-zinc-850 cursor-pointer"
+                        title="Excluir Compromisso"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          )}
         </div>
-      )}
 
-      {/* Editor Modal overlay */}
-      <AnimatePresence>
-        {isEditorOpen && (
-          <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto no-print">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.96 }}
-              className="bg-[#141416] border border-zinc-800 rounded-2xl w-full max-w-lg shadow-2xl relative overflow-hidden"
-            >
-              <div className="absolute top-0 left-0 right-0 h-[3px] bg-amber-500" />
+        {/* Right Side: Event Form Panel (Col Span 5) */}
+        <div className="lg:col-span-5">
+          <div className="bg-[#141416] border border-zinc-800 rounded-2xl w-full shadow-2xl p-6 text-left relative overflow-hidden">
+            {/* Accent decoration stripe */}
+            <div className={`absolute top-0 left-0 right-0 h-[3px] transition-colors duration-200 ${editingId ? 'bg-indigo-500' : 'bg-amber-500'}`} />
 
-              <div className="p-5 border-b border-zinc-850 flex items-center justify-between">
-                <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-amber-500" />
-                  {editingAgenda ? 'Editar Informações da Agenda' : 'Adicionar Novo Evento à Agenda'}
-                </h3>
+            <div className="pb-4 mb-4 border-b border-zinc-850 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                <Calendar className={`w-4 h-4 ${editingId ? 'text-indigo-400' : 'text-amber-500'}`} />
+                {editingId ? 'Editar Compromisso da Agenda' : 'Cadastrar Novo Evento / Pauta'}
+              </h3>
+              {editingId && (
                 <button
-                  onClick={closeEditor}
-                  className="text-zinc-500 hover:text-zinc-300 p-1"
+                  onClick={handleCancelEdit}
+                  className="p-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-all text-[10px] font-mono font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer"
+                  type="button"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-3 h-3" />
+                  <span>Cancelar</span>
                 </button>
+              )}
+            </div>
+
+            <form onSubmit={handleCreateOrUpdate} className="space-y-4">
+              {/* Event Name */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-bold">Nome do Evento / Pauta Destino *</label>
+                <input
+                  type="text"
+                  required
+                  value={formData.evento}
+                  onChange={(e) => updateField('evento', e.target.value)}
+                  placeholder="Ex: Cerimônia de Abertura da Exposição de Artes"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 font-sans"
+                />
+                {formData.evento.trim().length > 3 && (
+                  <div className="flex flex-wrap gap-2 pt-1 font-sans">
+                    <button
+                      type="button"
+                      disabled={isAiLoading}
+                      onClick={() => handleAiGenerateQuestions(formData.evento, formData.descricao)}
+                      className="px-2.5 py-1 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 disabled:opacity-50 text-[10px] font-bold rounded-lg transition-all flex items-center gap-1 border border-blue-500/20 cursor-pointer"
+                    >
+                      {isAiLoading ? (
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <span>🎙️ Gerar Perguntas por IA</span>
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
 
-              <form onSubmit={handleCreateOrUpdate} className="p-6 space-y-4">
-                {/* Event Name */}
-                <div className="space-y-1.5 font-sans">
-                  <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-bold">Nome do Evento / Pauta Destino *</label>
-                  <input
-                    type="text"
-                    required
-                    value={evento}
-                    onChange={(e) => setEvento(e.target.value)}
-                    placeholder="Ex: Cerimônia de Abertura da Exposição de Artes"
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                  />
-                  {evento.trim().length > 3 && (
-                    <div className="flex flex-wrap gap-2 pt-1 font-sans">
-                      <button
-                        type="button"
-                        disabled={isAiLoading}
-                        onClick={handleAiGenerateQuestions}
-                        className="px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 disabled:opacity-50 text-[11px] font-bold rounded-lg transition-all flex items-center gap-1.5 border border-blue-500/20 cursor-pointer"
-                      >
-                        {isAiLoading ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <span>🎙️ Gerar Perguntas para o Evento</span>
-                        )}
-                      </button>
-                    </div>
-                  )}
-                </div>
+              {/* DateTime */}
+              <div className="space-y-1.5 font-sans">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-bold">Data e Horário *</label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={formData.dataHora}
+                  onChange={(e) => updateField('dataHora', e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono"
+                />
+              </div>
 
-                {/* DateTime and Local */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-bold">Data e Horário *</label>
-                    <input
-                      type="datetime-local"
-                      required
-                      value={dataHora}
-                      onChange={(e) => setDataHora(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono"
-                    />
+              {/* Local */}
+              <div className="space-y-1.5 font-sans">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-bold">Local / Endereço</label>
+                <input
+                  type="text"
+                  value={formData.local}
+                  onChange={(e) => updateField('local', e.target.value)}
+                  placeholder="Ex: Centro de Convenções, Estúdio A"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
+              </div>
+
+              {/* Assessores e Contatos */}
+              <div className="space-y-1.5 font-sans">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-bold">Contato da Assessoria ou Organizadores</label>
+                <input
+                  type="text"
+                  value={formData.contato}
+                  onChange={(e) => updateField('contato', e.target.value)}
+                  placeholder="Ex: Assessora Joana (99) 99888-7766, joana@email.com"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
+              </div>
+
+              {/* Brief description */}
+              <div className="space-y-1.5 font-sans">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-bold">Observações / Descrição da cobertura</label>
+                <textarea
+                  rows={5}
+                  value={formData.descricao}
+                  onChange={(e) => updateField('descricao', e.target.value)}
+                  placeholder="Explique do que se trata ou coloque lembretes importantes para a entrega de equipes..."
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 resize-y min-h-[100px]"
+                />
+                {formData.descricao.trim().length > 5 && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={isAiLoading}
+                      onClick={() => handleAiFixGrammar(formData.descricao)}
+                      className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 disabled:opacity-50 text-[10px] font-bold rounded-lg transition-all flex items-center gap-1 border border-amber-500/20 cursor-pointer"
+                    >
+                      {isAiLoading ? (
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <span>✨ Corrigir Ortografia (IA)</span>
+                      )}
+                    </button>
                   </div>
+                )}
+              </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-bold">Local / Endereço</label>
-                    <input
-                      type="text"
-                      value={local}
-                      onChange={(e) => setLocal(e.target.value)}
-                      placeholder="Ex: Centro de Convenções, Estúdio A"
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                    />
-                  </div>
-                </div>
-
-                {/* Assessores e Contatos */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-bold">Contato da Assessoria ou Organizadores</label>
-                  <input
-                    type="text"
-                    value={contato}
-                    onChange={(e) => setContato(e.target.value)}
-                    placeholder="Ex: Assessora Joana (99) 99888-7766, joana@email.com"
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                  />
-                </div>
-
-                {/* Brief description */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-bold">Observações / Descrição da cobertura</label>
-                  <textarea
-                    rows={4}
-                    value={descricao}
-                    onChange={(e) => setDescricao(e.target.value)}
-                    placeholder="Explique do que se trata ou coloque lembretes importantes para a entrega de equipes..."
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 resize-none font-sans"
-                  />
-                  {descricao.trim().length > 5 && (
-                    <div className="flex flex-wrap gap-2 pt-1 font-sans">
-                      <button
-                        type="button"
-                        disabled={isAiLoading}
-                        onClick={handleAiFixGrammar}
-                        className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 disabled:opacity-50 text-[11px] font-bold rounded-lg transition-all flex items-center gap-1.5 border border-amber-500/20 cursor-pointer"
-                      >
-                        {isAiLoading ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <span>✨ Corrigir Ortografia e Estilo</span>
-                        )}
-                      </button>
-                    </div>
+              {/* Submit / Reset Actions */}
+              <div className="mt-6 pt-4 border-t border-zinc-850 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="px-3.5 py-2 border border-zinc-800 bg-zinc-900 hover:bg-zinc-850 text-zinc-450 hover:text-zinc-200 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                >
+                  Limpar
+                </button>
+                <button
+                  type="submit"
+                  disabled={syncStatus === 'saving'}
+                  className={`px-4.5 py-2 text-zinc-950 text-xs font-bold rounded-xl transition-all shadow-md select-none flex items-center gap-1.5 cursor-pointer ${
+                    editingId ? 'bg-indigo-400 hover:bg-indigo-300' : 'bg-amber-500 hover:bg-amber-400'
+                  }`}
+                >
+                  {syncStatus === 'saving' ? (
+                    <>
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      <span>Sincronizando...</span>
+                    </>
+                  ) : (
+                    <span>{editingId ? 'Atualizar Evento' : 'Salvar Compromisso'}</span>
                   )}
-                </div>
-
-                <div className="mt-8 flex justify-end gap-3 pt-5 border-t border-zinc-850">
-                  <button
-                    type="button"
-                    onClick={closeEditor}
-                    className="px-4 py-2 border border-zinc-800 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 hover:text-zinc-200 text-xs font-bold rounded-xl transition-all"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={syncStatus === 'saving'}
-                    className="px-5 py-2 bg-amber-500 hover:bg-amber-440 active:scale-95 text-zinc-950 text-xs font-bold rounded-xl transition-all shadow-md select-none flex items-center gap-1"
-                  >
-                    {syncStatus === 'saving' ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>A salvar...</span>
-                      </>
-                    ) : (
-                      <span>Gravar Compromisso</span>
-                    )}
-                  </button>
-                </div>
-              </form>
-            </motion.div>
+                </button>
+              </div>
+            </form>
           </div>
-        )}
-      </AnimatePresence>
+        </div>
+
+      </div>
 
       {/* Floating Notifications */}
       <AnimatePresence>

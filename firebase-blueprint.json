@@ -67,6 +67,15 @@
           "userId": { "type": "string" },
           "createdAt": { "type": "timestamp" }
         }
+      },
+      "online_users": {
+        "fields": {
+          "userId": { "type": "string" },
+          "userEmail": { "type": "string" },
+          "userName": { "type": "string" },
+          "location": { "type": "string" },
+          "lastActive": { "type": "string" }
+        }
       }
     }
   }

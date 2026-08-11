@@ -2,16 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Eye, EyeOff, CheckCircle2, AlertCircle } from 'lucide-react';
 import { auth, updatePassword, EmailAuthProvider, reauthenticateWithCredential, db, getDoc, doc, setDoc } from '../firebase';
-
-const DEFAULT_MEMBERS = [
-  { email: 'kaikycardososp@gmail.com', name: 'Kaiky Almeida' },
-  { email: 'moonlighterstore@gmail.com', name: 'Ana Luiza Lima' },
-  { email: 'franca.rodrigo1998@gmail.com', name: 'Rodrigo Rangel' },
-  { email: 'samcompop@outlook.com.br', name: 'Samuel Xavier' },
-  { email: 'kauapereira.jrn@gmail.com', name: 'Kauã Pereira' },
-  { email: 'miguelramalhocastilho759@gmail.com', name: 'Miguel Ramalho' },
-  { email: 'weverton.alvesdevetor@gmail.com', name: 'Weverton Souza' },
-];
+import { DEFAULT_MEMBERS, isUserAdmin } from '../types';
 
 interface ChangePasswordModalProps {
   isOpen: boolean;
@@ -78,7 +69,7 @@ export default function ChangePasswordModal({ isOpen, onClose, currentUser }: Ch
       } else {
         // No custom credentials document yet. Verify default predefined password
         const isPredefined = DEFAULT_MEMBERS.some(m => m.email.toLowerCase() === normalizedEmail);
-        const isAdmin = normalizedEmail === 'redetviespelho@redetvi.com' || normalizedEmail === 'rededetviespelho@redetvi.com';
+        const isAdmin = isUserAdmin(normalizedEmail);
         
         const expectedDefaultPassword = isAdmin ? 'espelho123' : 'tvi2026';
         if (currentPassword === expectedDefaultPassword) {

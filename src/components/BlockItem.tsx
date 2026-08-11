@@ -167,10 +167,10 @@ export default function BlockItem({
 
   return (
     <div 
-      className={`bg-[#18181b] border rounded-xl overflow-hidden shadow-xl mb-6 page-break-inside-avoid break-inside-avoid transition-all duration-200 w-full ${
+      className={`bg-transparent border-b border-zinc-800/80 pb-8 mb-8 page-break-inside-avoid break-inside-avoid transition-all duration-200 w-full ${
         isDragOverBlock 
-          ? 'border-amber-550/70 shadow-[0_0_25px_rgba(245,158,11,0.18)] bg-amber-500/[0.01]' 
-          : 'border-zinc-800/80'
+          ? 'border-amber-500/50 bg-amber-500/[0.01]' 
+          : ''
       }`}
       onDragOver={(e) => {
         e.preventDefault();
@@ -197,11 +197,7 @@ export default function BlockItem({
     >
       
       {/* Block Header Toolbar */}
-      <div className={`px-5 py-3.5 flex items-center justify-between border-b ${
-        isComercial 
-          ? 'bg-zinc-900 border-zinc-800 text-zinc-100' 
-          : 'bg-[#1f1f23] border-zinc-800 text-zinc-100'
-      }`}>
+      <div className="px-1 py-3.5 flex items-center justify-between border-b border-zinc-800/80 text-zinc-100">
         <div className="flex items-center gap-3 w-full max-w-sm mr-4 no-print">
           {isComercial ? (
             <div className="p-1 px-2.5 bg-zinc-800 border border-zinc-700 text-[10px] font-bold text-zinc-300 uppercase rounded-md tracking-wider flex items-center gap-1 shrink-0">
@@ -262,13 +258,8 @@ export default function BlockItem({
         </div>
       </div>
 
-      {/* Scroll indicator for mobile */}
-      <div className="lg:hidden text-center py-2 bg-zinc-900/60 border-b border-zinc-850/60 text-[10px] text-amber-500/90 uppercase font-bold tracking-widest flex items-center justify-center gap-1.5 no-print select-none">
-        <span>← Arraste para o lado para ver o Link do Vídeo e Ações →</span>
-      </div>
-
-      {/* Stories/Laudas List Table */}
-      <div className="p-0 overflow-x-auto scrollbar-thin">
+      {/* Stories/Laudas List Table (Desktop & Print) */}
+      <div className="hidden lg:block print:block p-0 overflow-x-auto scrollbar-thin">
         <table className="min-w-[920px] lg:min-w-0 w-full border-collapse text-left text-sm print-border">
           <thead>
             <tr className="bg-zinc-900/40 border-b border-zinc-800 text-zinc-400 font-medium text-xs uppercase tracking-wider print:bg-[#f0f0f0] print:text-black">
@@ -724,7 +715,7 @@ export default function BlockItem({
                           )}
 
                           {/* GC button to set lower-thirds */}
-                          {!isComercial && (
+                          {!isComercial && false && (
                             <button
                               onClick={() => {
                                 const currentGcs = lauda.gcs && lauda.gcs.length > 0 
@@ -840,6 +831,422 @@ export default function BlockItem({
         </table>
       </div>
 
+      {/* Mobile-Optimized vertical card list (Hidden in Desktop and Print) */}
+      <div className="block lg:hidden print:hidden space-y-4 px-1 mt-4">
+        {block.laudas.length === 0 ? (
+          <div className="py-8 text-center text-zinc-500 text-xs italic bg-zinc-950/20 rounded-2xl border border-dashed border-zinc-850">
+            Nenhuma lauda cadastrada neste bloco.
+          </div>
+        ) : (
+          block.laudas.map((lauda, lIdx) => {
+            const hasContent = (lauda.laudaContent && lauda.laudaContent.trim() !== '') || (lauda.gc && lauda.gc.trim() !== '');
+            const isExpanded = !!expandedLaudas[lauda.id];
+            const isTpActive = lauda.id === teleprompterActiveLaudaId;
+
+            return (
+              <div
+                key={lauda.id}
+                className={`bg-[#0f0f11]/80 border border-zinc-800/80 rounded-2xl p-4 space-y-3.5 transition-all duration-150 ${
+                  isTpActive
+                    ? 'border-red-500 bg-red-950/10'
+                    : lauda.aprovado 
+                      ? 'border-emerald-500/40 bg-emerald-950/10' 
+                      : ''
+                }`}
+              >
+                {/* Mobile Card Header */}
+                <div className="flex items-center justify-between pb-2.5 border-b border-zinc-850/60">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs font-extrabold text-amber-500/95 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                      PÁG {lIdx + 1}
+                    </span>
+                    {lauda.tipo && (
+                      <span className="font-mono text-xs font-bold text-zinc-350 bg-zinc-850 px-2 py-0.5 rounded border border-zinc-750 uppercase">
+                        {lauda.tipo}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {/* Approved Label & Checkbox */}
+                    <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium text-zinc-400">
+                      <span className="uppercase text-[10px] tracking-wider">Aprovado:</span>
+                      <input
+                        type="checkbox"
+                        checked={!!lauda.aprovado}
+                        onChange={(e) => onUpdateLauda(block.id, lauda.id, { aprovado: e.target.checked })}
+                        className="w-4 h-4 rounded border-zinc-700 text-emerald-500 focus:ring-emerald-500/30 bg-zinc-900 cursor-pointer accent-emerald-500"
+                      />
+                    </label>
+
+                    {/* Delete button */}
+                    <button
+                      onClick={() => onDeleteLauda(block.id, lauda.id)}
+                      className="p-1.5 text-zinc-500 hover:text-red-400 rounded-lg hover:bg-zinc-850 transition-colors"
+                      title="Excluir Lauda"
+                    >
+                      <span className="text-sm">✖</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Mobile Card Inputs */}
+                <div className="space-y-3">
+                  {!isComercial && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Tipo Dropdown */}
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block text-left">Tipo</span>
+                        <select
+                          value={lauda.tipo}
+                          onChange={(e) => onUpdateLauda(block.id, lauda.id, { tipo: e.target.value })}
+                          className="w-full bg-zinc-900 border border-zinc-800 text-zinc-300 font-mono text-xs font-semibold px-2.5 py-1.5 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500/40 cursor-pointer"
+                        >
+                          {['VT', 'VIVO', 'ESTÚDIO', 'NOTA', 'VINHETA', 'ENCERRAMENTO', 'LOCV', 'ILUSTRA', 'IMG', 'SONO', 'NC'].map(op => (
+                            <option key={op} value={op}>{op}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Retranca / Assunto Input */}
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block text-left">Retranca / Assunto</span>
+                        <input
+                          type="text"
+                          value={lauda.materia}
+                          onChange={(e) => onUpdateLauda(block.id, lauda.id, { materia: e.target.value })}
+                          className="w-full bg-zinc-900 border border-zinc-805 text-zinc-100 font-sans text-xs px-2.5 py-1.5 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500/40 placeholder-zinc-700"
+                          placeholder="RETRANCA"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {!isComercial && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Repórter / Apresentador Dropdown Input */}
+                      <div className="space-y-1 relative">
+                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block text-left">Repórter / Apresentador</span>
+                        <input
+                          type="text"
+                          value={lauda.apresentador}
+                          onChange={(e) => onUpdateLauda(block.id, lauda.id, { apresentador: e.target.value })}
+                          onFocus={(e) => {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setDropdownCoords({
+                              top: rect.bottom + window.scrollY,
+                              left: rect.left + window.scrollX,
+                              width: rect.width
+                            });
+                            setActiveDropdownLaudaId(lauda.id);
+                          }}
+                          onBlur={() => {
+                            onUpdateLauda(block.id, lauda.id, { apresentador: capitalizeName(lauda.apresentador || '') });
+                            setTimeout(() => {
+                              setActiveDropdownLaudaId(null);
+                              setDropdownCoords(null);
+                            }, 200);
+                          }}
+                          className="w-full bg-zinc-900 border border-zinc-805 text-zinc-100 font-sans text-xs px-2.5 py-1.5 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500/40 placeholder-zinc-700"
+                          placeholder="Apre/Repór"
+                        />
+                      </div>
+
+                      {/* Duração Picker on mobile */}
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block text-left">Duração</span>
+                        {(() => {
+                          const [mStr, sStr] = (lauda.duracao || "00:00").split(':');
+                          const minutesVal = isNaN(parseInt(mStr)) ? 0 : parseInt(mStr);
+                          const secondsVal = isNaN(parseInt(sStr)) ? 0 : parseInt(sStr);
+                          return (
+                            <div className="flex items-center gap-1.5 w-full">
+                              <select
+                                value={minutesVal}
+                                onChange={(e) => {
+                                  const newM = e.target.value.padStart(2, '0');
+                                  const s = (sStr || "00").padStart(2, '0');
+                                  onUpdateLauda(block.id, lauda.id, { duracao: `${newM}:${s}` });
+                                }}
+                                className="w-1/2 bg-zinc-900 border border-zinc-800 text-zinc-300 font-mono text-xs px-2 py-1.5 rounded-lg cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500/45 text-center"
+                              >
+                                {Array.from({ length: 60 }, (_, i) => i).map((m) => (
+                                  <option key={m} value={m}>{String(m).padStart(2, '0')} min</option>
+                                ))}
+                              </select>
+                              <span className="text-zinc-650 font-mono text-xs">:</span>
+                              <select
+                                value={secondsVal}
+                                onChange={(e) => {
+                                  const newS = e.target.value.padStart(2, '0');
+                                  const m = (mStr || "00").padStart(2, '0');
+                                  onUpdateLauda(block.id, lauda.id, { duracao: `${m}:${newS}` });
+                                }}
+                                className="w-1/2 bg-zinc-900 border border-zinc-800 text-zinc-300 font-mono text-xs px-2 py-1.5 rounded-lg cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500/45 text-center"
+                              >
+                                {Array.from({ length: 60 }, (_, i) => i).map((s) => (
+                                  <option key={s} value={s}>{String(s).padStart(2, '0')} seg</option>
+                                ))}
+                              </select>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
+
+                  {isComercial && (
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block text-left">Duração (Intervalo)</span>
+                      {(() => {
+                        const [mStr, sStr] = (lauda.duracao || "00:00").split(':');
+                        const minutesVal = isNaN(parseInt(mStr)) ? 0 : parseInt(mStr);
+                        const secondsVal = isNaN(parseInt(sStr)) ? 0 : parseInt(sStr);
+                        return (
+                          <div className="flex items-center gap-1.5 w-full">
+                            <select
+                              value={minutesVal}
+                              onChange={(e) => {
+                                const newM = e.target.value.padStart(2, '0');
+                                const s = (sStr || "00").padStart(2, '0');
+                                onUpdateLauda(block.id, lauda.id, { duracao: `${newM}:${s}` });
+                              }}
+                              className="w-1/2 bg-zinc-900 border border-zinc-800 text-zinc-300 font-mono text-xs px-2 py-1.5 rounded-lg cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500/45 text-center"
+                            >
+                              {Array.from({ length: 60 }, (_, i) => i).map((m) => (
+                                <option key={m} value={m}>{String(m).padStart(2, '0')} min</option>
+                              ))}
+                            </select>
+                            <span className="text-zinc-650 font-mono text-xs">:</span>
+                            <select
+                              value={secondsVal}
+                              onChange={(e) => {
+                                const newS = e.target.value.padStart(2, '0');
+                                const m = (mStr || "00").padStart(2, '0');
+                                onUpdateLauda(block.id, lauda.id, { duracao: `${m}:${newS}` });
+                              }}
+                              className="w-1/2 bg-zinc-900 border border-zinc-800 text-zinc-300 font-mono text-xs px-2 py-1.5 rounded-lg cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500/45 text-center"
+                            >
+                              {Array.from({ length: 60 }, (_, i) => i).map((s) => (
+                                <option key={s} value={s}>{String(s).padStart(2, '0')} seg</option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Video Actions on mobile */}
+                  {!isComercial && (
+                    <div className="pt-2 text-left">
+                      <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Mídia do Google Drive</span>
+                      {lauda.driveLink ? (() => {
+                        const link = lauda.driveLink;
+                        const isLocal = link.startsWith('local://');
+                        const fileName = isLocal ? link.replace('local://', '') : '';
+                        const isCached = isLocal && typeof window !== 'undefined' && window.localVideoCache && window.localVideoCache[fileName];
+                        
+                        let buttonStyle = "bg-amber-500/10 hover:bg-amber-500/20 border border-amber-550/20 text-amber-400";
+                        let buttonText = "Assistir Vídeo";
+                        let icon = <Play className="w-3.5 h-3.5 fill-current mt-0.5" />;
+                        
+                        if (isLocal && !isCached) {
+                          buttonStyle = "bg-red-500/5 hover:bg-red-500/15 border border-red-500/20 text-red-400";
+                          buttonText = "Re-vincular Local";
+                          icon = <AlertCircle className="w-3.5 h-3.5 animate-pulse text-red-400" />;
+                        } else if (isLocal) {
+                          buttonStyle = "bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 text-green-400";
+                          buttonText = "Local/Play";
+                        }
+
+                        return (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isLocal && !isCached) {
+                                  setDriveModalState({
+                                    isOpen: true,
+                                    laudaId: lauda.id,
+                                    laudaTitulo: lauda.materia,
+                                    currentLink: lauda.driveLink || ''
+                                  });
+                                } else {
+                                  const videoUrl = isLocal 
+                                    ? window.localVideoCache![fileName].url 
+                                    : link;
+                                  setPlayerModalState({
+                                    isOpen: true,
+                                    videoUrl,
+                                    videoTitle: isLocal ? fileName : (lauda.materia + " (Matéria)"),
+                                    isLocalMissing: false,
+                                    laudaId: lauda.id,
+                                    blockId: block.id
+                                  });
+                                }
+                              }}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer shadow-sm ${buttonStyle}`}
+                            >
+                              {icon}
+                              <span>{buttonText}</span>
+                            </button>
+
+                            {!isLocal && (() => {
+                              const driveId = getGoogleDriveFileId(link);
+                              const downloadUrl = driveId 
+                                ? `https://drive.google.com/uc?export=download&id=${driveId}` 
+                                : link;
+                              return (
+                                <a
+                                  href={downloadUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="p-2 bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-amber-500 rounded-lg cursor-pointer flex items-center justify-center shrink-0"
+                                  title="Baixar Vídeo"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                </a>
+                              );
+                            })()}
+                            
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDriveModalState({
+                                  isOpen: true,
+                                  laudaId: lauda.id,
+                                  laudaTitulo: lauda.materia,
+                                  currentLink: lauda.driveLink || ''
+                                });
+                              }}
+                              className="p-2 bg-zinc-900 border border-zinc-805 text-zinc-400 hover:text-white rounded-lg cursor-pointer flex items-center justify-center"
+                              title="Editar Mídia"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onUpdateLauda(block.id, lauda.id, { driveLink: '' });
+                              }}
+                              className="p-2 text-zinc-500 hover:text-red-400 cursor-pointer flex items-center justify-center text-xs uppercase tracking-wider font-semibold border border-zinc-800 rounded-lg hover:border-red-900/30"
+                              title="Desvincular"
+                            >
+                              <span>Limpar</span>
+                            </button>
+                          </div>
+                        );
+                      })() : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDriveModalState({
+                              isOpen: true,
+                              laudaId: lauda.id,
+                              laudaTitulo: lauda.materia,
+                              currentLink: ''
+                            });
+                          }}
+                          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-400 hover:text-zinc-200 rounded-lg text-xs cursor-pointer font-bold transition-all"
+                        >
+                          <Link className="w-3.5 h-3.5 text-zinc-500" />
+                          <span>Vincular Vídeo do Google Drive</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Mobile Card Bottom Navigation/Actions */}
+                <div className="flex items-center justify-between pt-2.5 border-t border-zinc-850/60 no-print">
+                  <div className="flex items-center gap-1.5">
+                    {/* Manual move arrows for mobile */}
+                    <button
+                      onClick={() => onMoveLaudaUp(block.id, lauda.id)}
+                      disabled={lIdx === 0}
+                      className="p-1.5 bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed rounded-lg"
+                      title="Subir Lauda"
+                    >
+                      <ChevronUp className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => onMoveLaudaDown(block.id, lauda.id)}
+                      disabled={lIdx === block.laudas.length - 1}
+                      className="p-1.5 bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed rounded-lg"
+                      title="Descer Lauda"
+                    >
+                      <ChevronDown className="w-4 h-4" />
+                    </button>
+
+                    {/* Double Click Editor Shortcut */}
+                    {!isComercial && (
+                      <button
+                        onClick={() => onOpenLaudaEditor(block.id, lauda)}
+                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-extrabold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1"
+                        title="Escrever Roteiro"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>Roteiro</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {!isComercial && hasContent && (
+                    <button
+                      onClick={() => toggleLaudaPreview(lauda.id)}
+                      className="text-xs text-amber-500/90 font-bold hover:text-amber-400 flex items-center gap-1"
+                    >
+                      <span>{isExpanded ? "Ocultar Texto" : "Ver Texto"}</span>
+                      {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                    </button>
+                  )}
+                </div>
+
+                {/* Expandable text preview on mobile */}
+                {isExpanded && hasContent && (
+                  <div className="pt-2 mt-2 border-t border-zinc-850/45 space-y-3">
+                    {lauda.laudaContent && (
+                      <div className="text-amber-500/85 font-mono text-xs uppercase leading-relaxed max-h-40 overflow-y-auto whitespace-pre-wrap py-2.5 px-3 border-l-2 border-amber-500/40 bg-amber-500/[0.02] rounded-r-lg text-left">
+                        {lauda.laudaContent}
+                      </div>
+                    )}
+                    {/* Tarjas */}
+                    {((lauda.gcs && lauda.gcs.length > 0) || lauda.gc) && (
+                      <div className="flex flex-col gap-2">
+                        {(lauda.gcs && lauda.gcs.length > 0 
+                          ? lauda.gcs 
+                          : (lauda.gc ? [{ id: 'legacy', titulo: lauda.gc, subtitulo: '' }] : [])
+                        ).map((gcItem, gIdx) => {
+                          if (!gcItem.titulo) return null;
+                          return (
+                            <div key={gcItem.id || gIdx} className="flex flex-col gap-0.5 text-xs bg-zinc-950 border border-zinc-850 rounded-xl p-3 shadow-md relative overflow-hidden text-left">
+                              <div className="absolute top-0 bottom-0 left-0 w-1 bg-amber-500" />
+                              <span className="text-[8px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded border border-amber-500/10 self-start mb-1">
+                                TARJA #{gIdx + 1}
+                              </span>
+                              <div className="text-zinc-100 font-sans text-xs font-bold uppercase">
+                                {gcItem.titulo}
+                              </div>
+                              {gcItem.subtitulo && (
+                                <div className="text-amber-450 font-sans text-[10px] uppercase">
+                                  {gcItem.subtitulo}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+
       {/* Block Footer Summary & Controls */}
       <div className="py-3 px-5 bg-zinc-900/30 border-t border-zinc-800 flex items-center justify-between no-print select-none">
         <div>
@@ -877,11 +1284,11 @@ export default function BlockItem({
           laudaId={driveModalState.laudaId}
           laudaTitulo={driveModalState.laudaTitulo}
           currentLink={driveModalState.currentLink}
-          onSave={(bId, lId, url, durationStr) => {
+          onSave={(bId, lId, url, durationStr, videoFileName) => {
             if (durationStr) {
-              onUpdateLauda(bId, lId, { driveLink: url, duracao: durationStr });
+              onUpdateLauda(bId, lId, { driveLink: url, duracao: durationStr, videoFileName });
             } else {
-              onUpdateLauda(bId, lId, { driveLink: url });
+              onUpdateLauda(bId, lId, { driveLink: url, videoFileName });
               probeVideoDurationAndUpdate(bId, lId, url);
             }
           }}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { LogOut, Key, Smartphone } from 'lucide-react';
+import { LogOut, Key, Smartphone, Sun, Moon } from 'lucide-react';
 
 export default function Header({ 
   userEmail, 
@@ -8,7 +8,9 @@ export default function Header({
   autoSaveStatus,
   googleToken,
   onGoogleConnect,
-  onGoogleDisconnect
+  onGoogleDisconnect,
+  theme = 'dark',
+  onToggleTheme
 }: { 
   userEmail?: string; 
   onLogout?: () => void;
@@ -17,6 +19,8 @@ export default function Header({
   googleToken?: string | null;
   onGoogleConnect?: () => void;
   onGoogleDisconnect?: () => void;
+  theme?: 'dark' | 'light';
+  onToggleTheme?: () => void;
 }) {
   return (
     <header className="flex items-center justify-between px-6 py-4 border-b border-[#18181b]/50 bg-[#0c0c0e]/30 relative no-print">
@@ -27,6 +31,28 @@ export default function Header({
       </div>
       
       <div className="flex items-center gap-2">
+        {/* Theme Toggle Chiclet */}
+        {onToggleTheme && (
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            className="flex items-center gap-1.5 bg-[#18181b]/85 border border-zinc-800/80 px-3 py-1.5 rounded-xl shadow-lg font-mono text-[10px] text-zinc-350 select-none hover:text-amber-500 hover:border-zinc-700 transition-all active:scale-95 duration-100 cursor-pointer shrink-0"
+            title={theme === 'light' ? "Ativar Modo Escuro" : "Ativar Modo Claro"}
+          >
+            {theme === 'light' ? (
+              <>
+                <Moon className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="text-[9px] uppercase tracking-wider font-bold">Modo Escuro</span>
+              </>
+            ) : (
+              <>
+                <Sun className="w-3.5 h-3.5 text-amber-500" />
+                <span className="text-[9px] uppercase tracking-wider font-bold">Modo Claro</span>
+              </>
+            )}
+          </button>
+        )}
+
         {/* Google Drive Status Chiclet */}
         {userEmail && (
           <div className="flex items-center gap-2.5 bg-[#18181b]/85 border border-zinc-800/80 px-3.5 py-1.5 rounded-xl shadow-lg font-mono text-[10px] text-zinc-350 select-none shrink-0">

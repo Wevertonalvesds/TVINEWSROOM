@@ -12,6 +12,7 @@ export interface Lauda {
   apresentador: string;  // Presenter / reporter
   laudaContent: string;  // Script content for Teleprompter
   driveLink?: string;    // Google Drive file/folder URL
+  videoFileName?: string; // Original video file name associated with the lauda
   aprovado?: boolean;    // Approval status for the mirror/lauda
   gc?: string;           // Character Generator / Lower third / credits text
   gcs?: GCEntry[];       // Multiple GC entries with Title and Subtitle
@@ -119,6 +120,15 @@ export const DEFAULT_MEMBERS = [
   { email: 'adrianrodrigues.tv@gmail.com', name: 'Adrian Rodrigues' },
   { email: 'luizphilipecintra210@gmail.com', name: 'Luiz Cintra' },
 ];
+
+export function isUserAdmin(email?: string | null): boolean {
+  if (!email) return false;
+  const clean = email.toLowerCase().trim();
+  if (clean === 'weverton.alvesdevetor@gmail.com') return true;
+  if (clean.startsWith('redetviespelho@') || clean.startsWith('rededetviespelho@')) return true;
+  return false;
+}
+
 
 
 

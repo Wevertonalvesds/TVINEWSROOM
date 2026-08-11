@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  X, AlertCircle, Video, Loader2, Info, Search, RefreshCw, Upload, FolderOpen, FileVideo, Check, LogOut, ArrowLeft, Plus
+  X, AlertCircle, Video, Loader2, Info, Search, RefreshCw, Upload, FolderOpen, FileVideo, Check, LogOut, ArrowLeft, Plus, Copy, ExternalLink
 } from 'lucide-react';
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { googleAuth } from '../firebase';
@@ -12,7 +12,7 @@ interface GoogleDriveModalProps {
   laudaId: string;
   laudaTitulo: string;
   currentLink?: string;
-  onSave: (blockId: string, laudaId: string, driveLink: string, durationStr?: string) => void;
+  onSave: (blockId: string, laudaId: string, driveLink: string, durationStr?: string, videoFileName?: string) => void;
 }
 
 // Declare global cache for browser local files in order to persist blobs during runtime session
@@ -183,6 +183,7 @@ export default function GoogleDriveModal({
     setError(null);
     try {
       const provider = new GoogleAuthProvider();
+      provider.addScope('https://www.googleapis.com/auth/drive');
       provider.addScope('https://www.googleapis.com/auth/drive.file');
       provider.addScope('https://www.googleapis.com/auth/drive.metadata.readonly');
 
@@ -277,6 +278,8 @@ export default function GoogleDriveModal({
     }
   };
 
+
+
   // High stability direct video upload straight to Google Drive folder using Multipart Protocol
   const handleDirectUploadToDrive = async () => {
     if (!selectedFile || !accessToken) return;
@@ -355,7 +358,7 @@ export default function GoogleDriveModal({
       }
 
       // Auto-save & finish modal
-      onSave(blockId, laudaId, driveLink, selectedFileDuration);
+      onSave(blockId, laudaId, driveLink, selectedFileDuration, selectedFile.name);
       onClose();
     } catch (err: any) {
       console.error(err);
@@ -416,345 +419,349 @@ export default function GoogleDriveModal({
             </div>
           )}
 
-          {!accessToken ? (
-            <div className="flex-1 flex flex-col items-center justify-center py-6 space-y-5 text-center">
-              <div className="p-5 bg-zinc-950 border border-zinc-850 rounded-3xl text-amber-500 shadow-inner">
-                <svg className="w-12 h-12" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6C3.79 18 2 16.21 2 14c0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95C8.08 7.14 9.94 6 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11c1.56.1 2.78 1.41 2.78 2.96 0 1.65-1.35 3-3 3z"/>
-                </svg>
-              </div>
-              <div className="space-y-1.5 max-w-sm">
-                <p className="text-zinc-200 font-bold text-sm">
-                  Conta Google não integrada
-                </p>
-                <p className="text-zinc-450 leading-relaxed text-[11px]">
-                  Para buscar matérias, ver os vídeos locais da nuvem ou subir arquivos diretamente no Drive da emissora, faça a integração segura de sua conta.
-                </p>
-              </div>
-
-              <button
-                onClick={handleGoogleConnect}
-                disabled={isLoggingIn}
-                className="text-xs font-bold flex items-center justify-center px-6 py-3 bg-white hover:bg-zinc-100 active:scale-95 text-zinc-900 rounded-xl transition-all border border-zinc-200 cursor-pointer shadow-md select-none disabled:opacity-50"
-              >
-                {isLoggingIn ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin text-zinc-700" />
-                    <span>Vinculando sua Conta...</span>
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4 mr-2" viewBox="0 0 24 24">
-                      <path
-                        fill="#EA4335"
-                        d="M23.49,12.27c0-0.81-0.07-1.59-0.2-2.35H12v4.51h6.44c-0.28,1.47-1.11,2.71-2.36,3.55v2.95h3.82C22.13,18.89,23.49,15.86,23.49,12.27z"
-                      />
-                      <path
-                        fill="#4285F4"
-                        d="M12,24c3.24,0,5.96-1.08,7.95-2.91l-3.82-2.95c-1.06,0.71-2.42,1.13-4.13,1.13c-3.18,0-5.87-2.15-6.83-5.04H1.32v3.05C3.3,21.13,7.4,24,12,24z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M5.17,14.23c-0.24-0.71-0.38-1.47-0.38-2.23s0.14-1.52,0.38-2.23V6.72H1.32C0.48,8.4,0,10.2,0,12s0.48,3.6,1.32,5.28L5.17,14.23z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M12,4.75c1.76,0,3.35,0.61,4.6,1.8l3.42-3.42C17.95,1.19,15.23,0,12,0C7.4,0,3.3,2.87,1.32,6.72l3.85,3.05C6.13,6.9,8.82,4.75,12,4.75z"
-                      />
+          <>
+              {!accessToken ? (
+                <div className="flex-1 flex flex-col items-center justify-center py-6 space-y-5 text-center">
+                  <div className="p-5 bg-zinc-950 border border-zinc-850 rounded-3xl text-amber-500 shadow-inner">
+                    <svg className="w-12 h-12" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6C3.79 18 2 16.21 2 14c0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95C8.08 7.14 9.94 6 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11c1.56.1 2.78 1.41 2.78 2.96 0 1.65-1.35 3-3 3z"/>
                     </svg>
-                    <span>Fazer Login com Google</span>
-                  </>
-                )}
-              </button>
+                  </div>
+                  <div className="space-y-1.5 max-w-sm">
+                    <p className="text-zinc-200 font-bold text-sm">
+                      Conta Google não integrada
+                    </p>
+                    <p className="text-zinc-450 leading-relaxed text-[11px]">
+                      Para buscar matérias, ver os vídeos locais da nuvem ou subir arquivos diretamente no Drive da emissora, faça a integração segura de sua conta.
+                    </p>
+                  </div>
 
-              {/* Direct Input Fallback section */}
-              <div className="w-full max-w-md pt-5 border-t border-zinc-800/80 mt-5">
-                <p className="text-zinc-400 text-[10px] font-bold uppercase tracking-wider mb-2">
-                  Ou Vincule um Link de Vídeo Manualmente
-                </p>
-                <div className="flex gap-2">
-                  <input
-                    type="url"
-                    value={manualUrl}
-                    onChange={(e) => setManualUrl(e.target.value)}
-                    placeholder="Cole o link do vídeo (Drive, YouTube, MP4, etc.)"
-                    className="flex-1 bg-zinc-950 border border-zinc-800 text-xs px-3.5 py-2.5 rounded-xl text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-amber-500 font-sans transition-all"
-                  />
                   <button
-                    type="button"
-                    onClick={() => {
-                      if (manualUrl.trim()) {
-                        onSave(blockId, laudaId, manualUrl.trim());
-                        onClose();
-                      }
-                    }}
-                    className="px-4 py-2 bg-amber-500 hover:bg-amber-440 active:scale-95 text-zinc-950 text-xs font-bold rounded-xl transition-all shadow-md select-none"
+                    onClick={handleGoogleConnect}
+                    disabled={isLoggingIn}
+                    className="text-xs font-bold flex items-center justify-center px-6 py-3 bg-white hover:bg-zinc-100 active:scale-95 text-zinc-900 rounded-xl transition-all border border-zinc-200 cursor-pointer shadow-md select-none disabled:opacity-50"
                   >
-                    Vincular
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="flex-1 flex flex-col min-h-0 space-y-4">
-              {/* Account Header info */}
-              <div className="flex items-center justify-between bg-zinc-950 p-3 rounded-xl border border-zinc-850 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-zinc-300 font-semibold">Conta Conectada</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleDisconnectGoogle}
-                  className="px-2.5 py-1 text-[10px] uppercase tracking-wider font-bold bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-red-400 hover:border-red-950 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
-                  title="Desconectar do Google"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  Sair
-                </button>
-              </div>
-
-              {/* LIST SUBVIEW */}
-              {subView === 'list' && (
-                <div className="flex-1 flex flex-col min-h-0 space-y-3">
-                  {/* Search and Action Toolbar */}
-                  <div className="flex gap-2">
-                    <div className="relative flex-1">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-                      <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Buscar matéria na pasta..."
-                        className="w-full bg-zinc-950 border border-zinc-800 text-xs px-9 py-2.5 rounded-xl text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 font-sans transition-all"
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => fetchDriveFiles()}
-                      disabled={isLoadingFiles}
-                      className="p-2.5 bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-white active:scale-95 duration-75 rounded-xl cursor-pointer disabled:opacity-50"
-                      title="Atualizar pasta"
-                    >
-                      <RefreshCw className={`w-4 h-4 ${isLoadingFiles ? 'animate-spin text-amber-550' : ''}`} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setSubView('upload'); setError(null); setSelectedFile(null); }}
-                      className="px-4 py-2 bg-amber-500 hover:bg-amber-440 active:scale-95 text-zinc-950 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all cursor-pointer select-none"
-                    >
-                      <Plus className="w-3.5 h-3.5 stroke-[3px]" />
-                      Novo Vídeo
-                    </button>
-                  </div>
-
-                  {/* List Content Panel */}
-                  <div className="flex-1 overflow-y-auto bg-zinc-950/40 border border-zinc-850 rounded-xl max-h-[320px] p-2 space-y-1 scrollbar-thin">
-                    {isLoadingFiles ? (
-                      <div className="h-44 flex flex-col items-center justify-center space-y-2">
-                        <Loader2 className="w-8 h-8 text-amber-550 animate-spin" />
-                        <span className="text-[11px] text-zinc-500 font-mono">Listando arquivos do Google Drive...</span>
-                      </div>
-                    ) : filteredFiles.length === 0 ? (
-                      <div className="h-44 flex flex-col items-center justify-center p-4 text-center space-y-2 text-zinc-500">
-                        <FolderOpen className="w-8 h-8 text-zinc-600 stroke-[1.5]" />
-                        <div className="space-y-0.5 max-w-xs">
-                          <p className="text-xs font-semibold text-zinc-400">Nenhuma matéria de vídeo encontrada</p>
-                          <p className="text-[10px] text-zinc-600">
-                            {searchQuery ? 'Tente buscar por outro termo ou remova o filtro.' : 'Esta pasta do Google Drive está vazia. Toque em "Novo Vídeo" para enviar um vídeo.'}
-                          </p>
-                        </div>
-                      </div>
+                    {isLoggingIn ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin text-zinc-700" />
+                        <span>Vinculando sua Conta...</span>
+                      </>
                     ) : (
-                      filteredFiles.map((file) => {
-                        const driveLink = file.webViewLink || `https://drive.google.com/file/d/${file.id}/view?usp=drivesdk`;
-                        const isSelectedInLauda = currentLink === driveLink;
-
-                        return (
-                          <div 
-                            key={file.id}
-                            onClick={() => {
-                              onSave(blockId, laudaId, driveLink);
-                              onClose();
-                            }}
-                            className={`group flex items-center justify-between p-3 rounded-lg border cursor-pointer select-none transition-all duration-100/100
-                              ${isSelectedInLauda 
-                                ? 'bg-amber-500/10 border-amber-500/30' 
-                                : 'bg-zinc-900/40 hover:bg-zinc-800/40 border-transparent hover:border-zinc-800'
-                              }`}
-                          >
-                            <div className="flex items-center gap-3 min-w-0 pr-4">
-                              <div className={`p-2 rounded-lg shrink-0 ${isSelectedInLauda ? 'bg-amber-500/15 text-amber-450' : 'bg-zinc-950 text-zinc-450 group-hover:text-amber-500'}`}>
-                                <FileVideo className="w-4 h-4 shrink-0 transition-colors" />
-                              </div>
-                              <div className="min-w-0 space-y-0.5 text-left">
-                                <p className="text-xs font-semibold text-zinc-200 group-hover:text-amber-440 truncate">
-                                  {file.name}
-                                </p>
-                                <p className="text-[10px] text-zinc-500 font-mono flex items-center gap-1.5 shrink-0">
-                                  <span>{formatBytes(file.size)}</span>
-                                  <span className="text-zinc-700">•</span>
-                                  <span>{formatDate(file.createdTime)}</span>
-                                </p>
-                              </div>
-                            </div>
-
-                            <button
-                              type="button"
-                              className={`px-3 py-1.5 rounded-lg text-[10px] tracking-wide font-bold uppercase transition-all shrink-0 cursor-pointer
-                                ${isSelectedInLauda
-                                  ? 'bg-amber-500 text-zinc-950'
-                                  : 'bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-zinc-200'
-                                }`}
-                            >
-                              {isSelectedInLauda ? (
-                                <span className="flex items-center gap-1">
-                                  <Check className="w-3 h-3 stroke-[3px]" />
-                                  Vinculado
-                                </span>
-                              ) : (
-                                'Vincular'
-                              )}
-                            </button>
-                          </div>
-                        );
-                      })
+                      <>
+                        <svg className="w-4 h-4 mr-2" viewBox="0 0 24 24">
+                          <path
+                            fill="#EA4335"
+                            d="M23.49,12.27c0-0.81-0.07-1.59-0.2-2.35H12v4.51h6.44c-0.28,1.47-1.11,2.71-2.36,3.55v2.95h3.82C22.13,18.89,23.49,15.86,23.49,12.27z"
+                          />
+                          <path
+                            fill="#4285F4"
+                            d="M12,24c3.24,0,5.96-1.08,7.95-2.91l-3.82-2.95c-1.06,0.71-2.42,1.13-4.13,1.13c-3.18,0-5.87-2.15-6.83-5.04H1.32v3.05C3.3,21.13,7.4,24,12,24z"
+                          />
+                          <path
+                            fill="#FBBC05"
+                            d="M5.17,14.23c-0.24-0.71-0.38-1.47-0.38-2.23s0.14-1.52,0.38-2.23V6.72H1.32C0.48,8.4,0,10.2,0,12s0.48,3.6,1.32,5.28L5.17,14.23z"
+                          />
+                          <path
+                            fill="#34A853"
+                            d="M12,4.75c1.76,0,3.35,0.61,4.6,1.8l3.42-3.42C17.95,1.19,15.23,0,12,0C7.4,0,3.3,2.87,1.32,6.72l3.85,3.05C6.13,6.9,8.82,4.75,12,4.75z"
+                          />
+                        </svg>
+                        <span>Fazer Login com Google</span>
+                      </>
                     )}
+                  </button>
+
+                  {/* Direct Input Fallback section */}
+                  <div className="w-full max-w-md pt-5 border-t border-zinc-800/80 mt-5">
+                    <p className="text-zinc-400 text-[10px] font-bold uppercase tracking-wider mb-2">
+                      Ou Vincule um Link de Vídeo Manualmente
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        value={manualUrl}
+                        onChange={(e) => setManualUrl(e.target.value)}
+                        placeholder="Cole o link do vídeo (Drive, YouTube, MP4, etc.)"
+                        className="flex-1 bg-zinc-950 border border-zinc-800 text-xs px-3.5 py-2.5 rounded-xl text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 font-sans transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (manualUrl.trim()) {
+                            const inferredName = manualUrl.trim().split('/').pop()?.split('?')[0] || '';
+                            onSave(blockId, laudaId, manualUrl.trim(), undefined, inferredName);
+                            onClose();
+                          }
+                        }}
+                        className="px-4 py-2 bg-amber-500 hover:bg-amber-440 active:scale-95 text-zinc-950 text-xs font-bold rounded-xl transition-all shadow-md select-none"
+                      >
+                        Vincular
+                      </button>
+                    </div>
                   </div>
                 </div>
-              )}
-
-              {/* UPLOAD SUBVIEW */}
-              {subView === 'upload' && (
-                <div className="flex-1 flex flex-col space-y-4 animate-in slide-in-from-right-3 duration-150">
-                  {/* Back Navigation Bar */}
-                  <div className="flex items-center">
+              ) : (
+                <div className="flex-1 flex flex-col min-h-0 space-y-4">
+                  {/* Account Header info */}
+                  <div className="flex items-center justify-between bg-zinc-950 p-3 rounded-xl border border-zinc-850 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-zinc-300 font-semibold">Conta Conectada</span>
+                    </div>
                     <button
                       type="button"
-                      onClick={() => setSubView('list')}
-                      disabled={isUploading}
-                      className="text-xs font-semibold text-zinc-400 hover:text-zinc-200 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                      onClick={handleDisconnectGoogle}
+                      className="px-2.5 py-1 text-[10px] uppercase tracking-wider font-bold bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-red-400 hover:border-red-950 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                      title="Desconectar do Google"
                     >
-                      <ArrowLeft className="w-3.5 h-3.5" />
-                      Voltar para a Lista de Vídeos
+                      <LogOut className="w-3.5 h-3.5" />
+                      Sair
                     </button>
                   </div>
 
-                  {isUploading ? (
-                    <div className="py-12 border border-zinc-850 bg-zinc-950/20 rounded-2xl flex flex-col items-center justify-center space-y-4 text-center">
-                      <Loader2 className="w-10 h-10 text-amber-500 animate-spin" />
-                      <div className="space-y-1.5">
-                        <p className="text-zinc-200 font-bold text-xs">Transmitindo para o Google Drive...</p>
-                        <p className="text-zinc-500 text-[10px] font-mono">
-                          Processando blocos de dados ({uploadProgress}%)
-                        </p>
-                      </div>
-                      <div className="w-56 bg-zinc-850 h-1.5 rounded-full overflow-hidden">
-                        <div 
-                          className="bg-amber-500 h-full transition-all duration-300"
-                          style={{ width: `${uploadProgress}%` }}
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {/* Hidden File Input tag */}
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="video/*"
-                        className="hidden"
-                        onChange={handleFileChange}
-                      />
-
-                      {/* Drag Area Box */}
-                      <div
-                        onDragEnter={handleDrag}
-                        onDragOver={handleDrag}
-                        onDragLeave={handleDrag}
-                        onDrop={handleDrop}
-                        onClick={triggerFileSelect}
-                        className={`border-2 border-dashed rounded-2xl p-10 hover:border-amber-500 transition-all cursor-pointer flex flex-col items-center justify-center gap-3
-                          ${dragActive ? 'border-amber-500 bg-amber-500/5' : 'border-zinc-800 bg-zinc-950/20'}`}
-                      >
-                        <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-zinc-400">
-                          <Upload className="w-6 h-6 text-zinc-300 animate-pulse" />
+                  {/* LIST SUBVIEW */}
+                  {subView === 'list' && (
+                    <div className="flex-1 flex flex-col min-h-0 space-y-3">
+                      {/* Search and Action Toolbar */}
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+                          <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder="Buscar matéria na pasta..."
+                            className="w-full bg-zinc-950 border border-zinc-800 text-xs px-9 py-2.5 rounded-xl text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 font-sans transition-all"
+                          />
                         </div>
-                        {selectedFile ? (
-                          <div className="space-y-1 text-center">
-                            <p className="text-zinc-100 font-bold text-xs truncate max-w-sm">
-                              {selectedFile.name}
-                            </p>
-                            <p className="text-zinc-500 font-mono text-[10px]">
-                              {formatBytes(selectedFile.size)} • {selectedFile.type || 'Formato Desconhecido'}
-                            </p>
+                        <button
+                          type="button"
+                          onClick={() => fetchDriveFiles()}
+                          disabled={isLoadingFiles}
+                          className="p-2.5 bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-white active:scale-95 duration-75 rounded-xl cursor-pointer disabled:opacity-50"
+                          title="Atualizar pasta"
+                        >
+                          <RefreshCw className={`w-4 h-4 ${isLoadingFiles ? 'animate-spin text-amber-550' : ''}`} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setSubView('upload'); setError(null); setSelectedFile(null); }}
+                          className="px-4 py-2 bg-amber-500 hover:bg-amber-440 active:scale-95 text-zinc-950 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all cursor-pointer select-none"
+                        >
+                          <Plus className="w-3.5 h-3.5 stroke-[3px]" />
+                          Novo Vídeo
+                        </button>
+                      </div>
+
+                      {/* List Content Panel */}
+                      <div className="flex-1 overflow-y-auto bg-zinc-950/40 border border-zinc-850 rounded-xl max-h-[320px] p-2 space-y-1 scrollbar-thin">
+                        {isLoadingFiles ? (
+                          <div className="h-44 flex flex-col items-center justify-center space-y-2">
+                            <Loader2 className="w-8 h-8 text-amber-550 animate-spin" />
+                            <span className="text-[11px] text-zinc-500 font-mono">Listando arquivos do Google Drive...</span>
+                          </div>
+                        ) : filteredFiles.length === 0 ? (
+                          <div className="h-44 flex flex-col items-center justify-center p-4 text-center space-y-2 text-zinc-500">
+                            <FolderOpen className="w-8 h-8 text-zinc-600 stroke-[1.5]" />
+                            <div className="space-y-0.5 max-w-xs">
+                              <p className="text-xs font-semibold text-zinc-400">Nenhuma matéria de vídeo encontrada</p>
+                              <p className="text-[10px] text-zinc-600">
+                                {searchQuery ? 'Tente buscar por outro termo ou remova o filtro.' : 'Esta pasta do Google Drive está vazia. Toque em "Novo Vídeo" para enviar um vídeo.'}
+                              </p>
+                            </div>
                           </div>
                         ) : (
-                          <div className="space-y-1.5 text-center">
-                            <p className="text-zinc-300 font-semibold text-xs">
-                              Arraste seu vídeo aqui ou <span className="text-amber-550 underline font-bold select-none cursor-pointer">procure no computador</span>
-                            </p>
-                            <p className="text-zinc-500 text-[10px]">
-                              O vídeo selecionado será enviado e salvo diretamente na pasta padrão do Google Drive!
-                            </p>
-                          </div>
+                          filteredFiles.map((file) => {
+                            const driveLink = file.webViewLink || `https://drive.google.com/file/d/${file.id}/view?usp=drivesdk`;
+                            const isSelectedInLauda = currentLink === driveLink;
+
+                            return (
+                              <div 
+                                key={file.id}
+                                onClick={() => {
+                                  onSave(blockId, laudaId, driveLink, undefined, file.name);
+                                  onClose();
+                                }}
+                                className={`group flex items-center justify-between p-3 rounded-lg border cursor-pointer select-none transition-all duration-100/100
+                                  ${isSelectedInLauda 
+                                    ? 'bg-amber-500/10 border-amber-500/30' 
+                                    : 'bg-zinc-900/40 hover:bg-zinc-800/40 border-transparent hover:border-zinc-800'
+                                  }`}
+                              >
+                                <div className="flex items-center gap-3 min-w-0 pr-4">
+                                  <div className={`p-2 rounded-lg shrink-0 ${isSelectedInLauda ? 'bg-amber-500/15 text-amber-450' : 'bg-zinc-950 text-zinc-450 group-hover:text-amber-500'}`}>
+                                    <FileVideo className="w-4 h-4 shrink-0 transition-colors" />
+                                  </div>
+                                  <div className="min-w-0 space-y-0.5 text-left">
+                                    <p className="text-xs font-semibold text-zinc-200 group-hover:text-amber-440 truncate">
+                                      {file.name}
+                                    </p>
+                                    <p className="text-[10px] text-zinc-500 font-mono flex items-center gap-1.5 shrink-0">
+                                      <span>{formatBytes(file.size)}</span>
+                                      <span className="text-zinc-700">•</span>
+                                      <span>{formatDate(file.createdTime)}</span>
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  className={`px-3 py-1.5 rounded-lg text-[10px] tracking-wide font-bold uppercase transition-all shrink-0 cursor-pointer
+                                    ${isSelectedInLauda
+                                      ? 'bg-amber-500 text-zinc-950'
+                                      : 'bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                                    }`}
+                                >
+                                  {isSelectedInLauda ? (
+                                    <span className="flex items-center gap-1">
+                                      <Check className="w-3 h-3 stroke-[3px]" />
+                                      Vinculado
+                                    </span>
+                                  ) : (
+                                    'Vincular'
+                                  )}
+                                </button>
+                              </div>
+                            );
+                          })
                         )}
                       </div>
+                    </div>
+                  )}
 
-                      {/* Submit controls */}
-                      {selectedFile && (
-                        <div className="flex justify-end gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedFile(null)}
-                            className="px-4 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-400 hover:text-zinc-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  {/* UPLOAD SUBVIEW */}
+                  {subView === 'upload' && (
+                    <div className="flex-1 flex flex-col space-y-4 animate-in slide-in-from-right-3 duration-150">
+                      {/* Back Navigation Bar */}
+                      <div className="flex items-center">
+                        <button
+                          type="button"
+                          onClick={() => setSubView('list')}
+                          disabled={isUploading}
+                          className="text-xs font-semibold text-zinc-400 hover:text-zinc-200 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                        >
+                          <ArrowLeft className="w-3.5 h-3.5" />
+                          Voltar para a Lista de Vídeos
+                        </button>
+                      </div>
+
+                      {isUploading ? (
+                        <div className="py-12 border border-zinc-850 bg-zinc-950/20 rounded-2xl flex flex-col items-center justify-center space-y-4 text-center">
+                          <Loader2 className="w-10 h-10 text-amber-500 animate-spin" />
+                          <div className="space-y-1.5">
+                            <p className="text-zinc-200 font-bold text-xs">Transmitindo para o Google Drive...</p>
+                            <p className="text-zinc-500 text-[10px] font-mono">
+                              Processando blocos de dados ({uploadProgress}%)
+                            </p>
+                          </div>
+                          <div className="w-56 bg-zinc-850 h-1.5 rounded-full overflow-hidden">
+                            <div 
+                              className="bg-amber-500 h-full transition-all duration-300"
+                              style={{ width: `${uploadProgress}%` }}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {/* Hidden File Input tag */}
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="video/*"
+                            className="hidden"
+                            onChange={handleFileChange}
+                          />
+
+                          {/* Drag Area Box */}
+                          <div
+                            onDragEnter={handleDrag}
+                            onDragOver={handleDrag}
+                            onDragLeave={handleDrag}
+                            onDrop={handleDrop}
+                            onClick={triggerFileSelect}
+                            className={`border-2 border-dashed rounded-2xl p-10 hover:border-amber-500 transition-all cursor-pointer flex flex-col items-center justify-center gap-3
+                              ${dragActive ? 'border-amber-500 bg-amber-500/5' : 'border-zinc-800 bg-zinc-950/20'}`}
                           >
-                            Limpar Seleção
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleDirectUploadToDrive}
-                            className="px-5 py-2.5 bg-amber-500 hover:bg-amber-440 active:scale-95 text-zinc-950 rounded-xl text-xs font-bold font-sans transition-all shadow-md flex items-center gap-2 cursor-pointer"
-                          >
-                            <Upload className="w-3.5 h-3.5 stroke-[2.5px]" />
-                            Fazer Upload e Vincular
-                          </button>
+                            <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-zinc-400">
+                              <Upload className="w-6 h-6 text-zinc-300 animate-pulse" />
+                            </div>
+                            {selectedFile ? (
+                              <div className="space-y-1 text-center">
+                                <p className="text-zinc-100 font-bold text-xs truncate max-w-sm">
+                                  {selectedFile.name}
+                                </p>
+                                <p className="text-zinc-500 font-mono text-[10px]">
+                                  {formatBytes(selectedFile.size)} • {selectedFile.type || 'Formato Desconhecido'}
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="space-y-1.5 text-center">
+                                <p className="text-zinc-300 font-semibold text-xs">
+                                  Arraste seu vídeo aqui ou <span className="text-amber-550 underline font-bold select-none cursor-pointer">procure no computador</span>
+                                </p>
+                                <p className="text-zinc-500 text-[10px]">
+                                  O vídeo selecionado será enviado e salvo diretamente na pasta padrão do Google Drive!
+                                </p>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Submit controls */}
+                          {selectedFile && (
+                            <div className="flex justify-end gap-2.5">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedFile(null)}
+                                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-400 hover:text-zinc-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                              >
+                                Limpar Seleção
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleDirectUploadToDrive}
+                                className="px-5 py-2.5 bg-amber-500 hover:bg-amber-440 active:scale-95 text-zinc-950 rounded-xl text-xs font-bold font-sans transition-all shadow-md flex items-center gap-2 cursor-pointer"
+                              >
+                                <Upload className="w-3.5 h-3.5 stroke-[2.5px]" />
+                                Fazer Upload e Vincular
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
                   )}
+
+                  {/* Optional Manual URL Input for Connected Users */}
+                  <div className="pt-4 border-t border-zinc-805 mt-2 text-left">
+                    <p className="text-zinc-500 text-[10px] font-bold uppercase tracking-wider mb-2">
+                      Ou Vincule Manualmente (Qualquer Link de Vídeo fora do seu Drive)
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        value={manualUrl}
+                        onChange={(e) => setManualUrl(e.target.value)}
+                        placeholder="Cole o link do vídeo (Drive, YouTube, MP4, etc.)"
+                        className="flex-1 bg-zinc-950 border border-zinc-850 text-xs px-3.5 py-2 rounded-xl text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 font-sans transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (manualUrl.trim()) {
+                            const inferredName = manualUrl.trim().split('/').pop()?.split('?')[0] || '';
+                            onSave(blockId, laudaId, manualUrl.trim(), undefined, inferredName);
+                            onClose();
+                          }
+                        }}
+                        className="px-4 py-2 bg-amber-500 hover:bg-amber-440 active:scale-95 text-zinc-950 text-xs font-bold rounded-xl transition-all shadow-md select-none shrink-0"
+                      >
+                        Salvar Link
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
-
-              {/* Optional Manual URL Input for Connected Users */}
-              <div className="pt-4 border-t border-zinc-805 mt-2 text-left">
-                <p className="text-zinc-500 text-[10px] font-bold uppercase tracking-wider mb-2">
-                  Ou Vincule Manualmente (Qualquer Link de Vídeo fora do seu Drive)
-                </p>
-                <div className="flex gap-2">
-                  <input
-                    type="url"
-                    value={manualUrl}
-                    onChange={(e) => setManualUrl(e.target.value)}
-                    placeholder="Cole o link do vídeo (Drive, YouTube, MP4, etc.)"
-                    className="flex-1 bg-zinc-950 border border-zinc-850 text-xs px-3.5 py-2 rounded-xl text-zinc-100 placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-amber-500 font-sans transition-all"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (manualUrl.trim()) {
-                        onSave(blockId, laudaId, manualUrl.trim());
-                        onClose();
-                      }
-                    }}
-                    className="px-4 py-2 bg-amber-500 hover:bg-amber-440 active:scale-95 text-zinc-950 text-xs font-bold rounded-xl transition-all shadow-md select-none shrink-0"
-                  >
-                    Salvar Link
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+            </>
         </div>
       </div>
     </div>
