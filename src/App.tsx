@@ -1794,7 +1794,7 @@ export default function App() {
         await updateDoc(docRef, payload);
 
         baseStateRef.current = {
-          nomePrograma: state.nomePrograma,
+          nomePrograma: state.nomePrograma.trim(),
           editorChefe: state.editorChefe || '',
           tempoPrograma: state.tempoPrograma,
           dataPrograma: state.dataPrograma || '',
@@ -1807,7 +1807,7 @@ export default function App() {
             if (t.id === activeTabId) {
               return {
                 ...t,
-                title: state.nomePrograma || 'Sem Título',
+                title: state.nomePrograma.trim() || 'Sem Título',
                 programState: { ...state },
                 cloudDocId: activeCloudDocId,
                 hasUnsavedChanges: false
@@ -1817,38 +1817,62 @@ export default function App() {
           }));
         }
       } else {
-        // Create Mode: check if a program with the same name already exists
-        const q = query(
-          collection(db, 'programs'),
-          where('nomePrograma', '==', state.nomePrograma.trim())
-        );
-        const querySnapshot = await getDocs(q);
+        // Create Mode (New Mirror or Unlinked Mirror):
+        // Always create a brand new document in Firestore so that unlinked/new mirrors are never overwritten by name
+        const docRef = await addDoc(collection(db, 'programs'), payload);
+        savedId = docRef.id;
 
-        if (!querySnapshot.empty) {
-          const confirmOverwrite = window.confirm(`Já existe um roteiro de "${state.nomePrograma.trim()}" salvo na nuvem. Deseja sobrescrevê-lo?\n\nClique em OK para sobrescrever ou Cancelar para alterar o nome do programa.`);
-          if (!confirmOverwrite) {
-            setIsSavingToCloud(false);
-            return;
-          }
-          const existingDoc = querySnapshot.docs[0];
-          const docRef = doc(db, 'programs', existingDoc.id);
-          await updateDoc(docRef, payload);
-          savedId = existingDoc.id;
-        } else {
-          // Create a brand new document
-          const docRef = await addDoc(collection(db, 'programs'), payload);
-          savedId = docRef.id;
-        }
+        // Link current session to this newly created cloud document
+        setActiveCloudDocId(savedId);
+        sessionStorage.setItem('rede_tvi_active_cloud_doc_id', savedId);
 
-        // Fulfill "Limpar o cabeçalho após criar um novo espelho"
-        setState(initialProgramState);
-        setActiveCloudDocId(null);
-        baseStateRef.current = null;
+        baseStateRef.current = {
+          nomePrograma: state.nomePrograma.trim(),
+          editorChefe: state.editorChefe || '',
+          tempoPrograma: state.tempoPrograma,
+          dataPrograma: state.dataPrograma || '',
+          blocos: state.blocos
+        };
 
-        // If they saved from a dynamic tab, return to the master Espelhos tab
+        // Update active tab ID and metadata so all created laudas & blocks remain attached
+        const newTabId = `roteiro-${savedId}`;
         if (activeTabId !== 'espelhos') {
-          setOpenedTabs(prev => prev.filter(t => t.id !== activeTabId));
-          setActiveTabId('espelhos');
+          setOpenedTabs(prev => prev.map(t => {
+            if (t.id === activeTabId) {
+              return {
+                ...t,
+                id: newTabId,
+                title: state.nomePrograma.trim() || 'Novo Espelho',
+                programState: { ...state },
+                cloudDocId: savedId,
+                hasUnsavedChanges: false
+              };
+            }
+            return t;
+          }));
+          setActiveTabId(newTabId);
+        } else {
+          setOpenedTabs(prev => {
+            const exists = prev.some(t => t.id === newTabId);
+            if (!exists) {
+              return [...prev, {
+                id: newTabId,
+                type: 'roteiro',
+                title: state.nomePrograma.trim() || 'Novo Espelho',
+                programState: { ...state },
+                cloudDocId: savedId,
+                hasUnsavedChanges: false
+              }];
+            }
+            return prev.map(t => t.id === newTabId ? {
+              ...t,
+              title: state.nomePrograma.trim() || 'Novo Espelho',
+              programState: { ...state },
+              cloudDocId: savedId,
+              hasUnsavedChanges: false
+            } : t);
+          });
+          setActiveTabId(newTabId);
         }
       }
 

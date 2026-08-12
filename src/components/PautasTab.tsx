@@ -118,17 +118,19 @@ export default function PautasTab({ currentUser, colaboradores = [] }: PautasTab
       console.error('Error loading local pautas', e);
     }
 
-    const isCloudUser = currentUser && currentUser.uid !== 'espelho-rede-tvi-master' && currentUser.uid !== 'offline-editor';
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
     if (!isCloudUser) {
       setIsLoading(false);
       return;
     }
 
     const q = query(collection(db, 'pautas'));
+    let hasCheckedSync = false;
 
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       // If cloud is empty but we have local cache, upload to sync!
-      if (querySnapshot.empty && loadedPautas.length > 0) {
+      if (querySnapshot.empty && loadedPautas.length > 0 && !hasCheckedSync) {
+        hasCheckedSync = true;
         console.log('Sincronizador: Nuvem vazia para "pautas", migrando cache local...');
         loadedPautas.forEach(async (p) => {
           try {
@@ -151,6 +153,8 @@ export default function PautasTab({ currentUser, colaboradores = [] }: PautasTab
         });
         return;
       }
+
+      hasCheckedSync = true;
 
       const cloudPautas: Pauta[] = [];
       querySnapshot.forEach((docSnap) => {
@@ -299,7 +303,7 @@ export default function PautasTab({ currentUser, colaboradores = [] }: PautasTab
     };
 
     let updatedList = [...pautas];
-    const isCloudUser = currentUser && currentUser.uid !== 'espelho-rede-tvi-master' && currentUser.uid !== 'offline-editor';
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
 
     try {
       if (activeTab.type === 'edit') {
@@ -358,7 +362,7 @@ export default function PautasTab({ currentUser, colaboradores = [] }: PautasTab
     setPautas(remaining);
     localStorage.setItem(LOCAL_PAUTAS_KEY, JSON.stringify(remaining));
 
-    const isCloudUser = currentUser && currentUser.uid !== 'espelho-rede-tvi-master' && currentUser.uid !== 'offline-editor';
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
     if (isCloudUser) {
       try {
         await deleteDoc(doc(db, 'pautas', id));

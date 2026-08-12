@@ -83,18 +83,20 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
       console.error('Error loading local agendas', e);
     }
 
-    const isCloudUser = currentUser && currentUser.uid !== 'espelho-rede-tvi-master' && currentUser.uid !== 'offline-editor';
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
     if (!isCloudUser) {
       setIsLoading(false);
       return;
     }
 
     const q = query(collection(db, 'agendas'));
+    let hasCheckedSync = false;
 
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       // If the cloud is completely empty, but the local storage has offline data,
       // upload/migrate the local data to the cloud first so it persists instead of being wiped out!
-      if (querySnapshot.empty && loadedAge.length > 0) {
+      if (querySnapshot.empty && loadedAge.length > 0 && !hasCheckedSync) {
+        hasCheckedSync = true;
         console.log('Sincronizador: Nuvem vazia para "agendas", migrando cache local para a nuvem...');
         loadedAge.forEach(async (age) => {
           try {
@@ -114,6 +116,8 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
         });
         return;
       }
+
+      hasCheckedSync = true;
 
       const cloudAge: Agenda[] = [];
       querySnapshot.forEach((docSnap) => {
@@ -189,7 +193,7 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
     };
 
     let updatedList = [...agendas];
-    const isCloudUser = currentUser && currentUser.uid !== 'espelho-rede-tvi-master' && currentUser.uid !== 'offline-editor';
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
 
     try {
       if (editingId) {
@@ -252,7 +256,7 @@ export default function AgendasTab({ currentUser }: AgendasTabProps) {
     setAgendas(remaining);
     localStorage.setItem(LOCAL_AGE_KEY, JSON.stringify(remaining));
 
-    const isCloudUser = currentUser && currentUser.uid !== 'espelho-rede-tvi-master' && currentUser.uid !== 'offline-editor';
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
     if (isCloudUser) {
       try {
         await deleteDoc(doc(db, 'agendas', id));

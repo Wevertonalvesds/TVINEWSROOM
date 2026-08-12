@@ -1,7 +1,7 @@
 {
-  "name": "REDE TVI • Espelho e Teleprompter",
-  "short_name": "TVI Prompter",
-  "description": "Sistema de Espelho de Telejornal e Teleprompter para a Rede TVI.",
+  "name": "TVI NEWSROOM • Espelho e Teleprompter",
+  "short_name": "TVI NEWSROOM",
+  "description": "Sistema de Espelho de Telejornal e Teleprompter para a TVI NEWSROOM.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0b0b0d",

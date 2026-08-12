@@ -80,6 +80,9 @@ export default function CloudSyncPanel({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleteTargetName, setDeleteTargetName] = useState<string | null>(null);
+
 
   // Load programs directory from cloud, allowing all editors to collaborate on the same programs
   const fetchCloudPrograms = async () => {
@@ -178,15 +181,10 @@ export default function CloudSyncPanel({
     }
 
     try {
-      // Check if a cloud routine with the exact same name already exists under the user's workspace
-      const existing = programs.find(
-        p => p.nomePrograma.trim().toLowerCase() === currentProgramState.nomePrograma.trim().toLowerCase()
-      );
-
       const payload = {
         userId: currentUser.uid,
         userEmail: currentUser.email || 'offline-editor@redetvi.com',
-        nomePrograma: currentProgramState.nomePrograma,
+        nomePrograma: currentProgramState.nomePrograma.trim(),
         editorChefe: currentProgramState.editorChefe || '',
         tempoPrograma: currentProgramState.tempoPrograma,
         dataPrograma: currentProgramState.dataPrograma || '',
@@ -196,22 +194,12 @@ export default function CloudSyncPanel({
 
       try {
         let savedId = activeCloudDocId;
-        if (existing) {
-          // If we don't have an active document, but there is an existing document with this name, ask before overwriting!
-          if (!activeCloudDocId) {
-            const confirmOverwrite = window.confirm(`Já existe um roteiro de "${currentProgramState.nomePrograma.trim()}" salvo na nuvem. Deseja sobrescrevê-lo? Se cancelar, mude o nome do programa para salvar como um novo roteiro.`);
-            if (!confirmOverwrite) {
-              setIsSaving(false);
-              setSyncStatus('idle');
-              return;
-            }
-          }
-          // Overwrite existing doc
-          const docRef = doc(db, 'programs', existing.id);
+        if (activeCloudDocId) {
+          // Overwrite active document
+          const docRef = doc(db, 'programs', activeCloudDocId);
           await updateDoc(docRef, payload);
-          savedId = existing.id;
         } else {
-          // Create new doc
+          // Create brand new document
           const docRef = await addDoc(collection(db, 'programs'), payload);
           savedId = docRef.id;
         }
@@ -240,12 +228,24 @@ export default function CloudSyncPanel({
     }
   };
 
-  // Delete a saved program template
-  const handleDeleteFromCloud = async (id: string, e: React.MouseEvent) => {
+  // Delete a saved program template (Trigger custom confirmation modal)
+  const handleDeleteFromCloud = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm('Deseja realmente deletar este programa da nuvem?')) {
-      return;
+    const prog = programs.find(p => p.id === id);
+    if (prog) {
+      setDeleteTargetId(id);
+      setDeleteTargetName(prog.nomePrograma);
     }
+  };
+
+  // Perform the actual deletion after confirmation
+  const confirmDeleteFromCloud = async () => {
+    if (!deleteTargetId) return;
+    const id = deleteTargetId;
+    
+    // Reset confirmation modal states
+    setDeleteTargetId(null);
+    setDeleteTargetName(null);
 
     try {
       try {
@@ -476,6 +476,50 @@ export default function CloudSyncPanel({
         </div>
         )}
       </div>
+
+      {/* Custom Confirmation Modal for Cloud Deletion */}
+      {deleteTargetId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-[#1c1c1f] border border-zinc-800 rounded-xl w-full max-w-md p-6 shadow-2xl text-left relative overflow-hidden animate-in fade-in zoom-in duration-250">
+            {/* Warning Glow */}
+            <div className="absolute -top-10 -left-10 w-36 h-36 bg-red-500/5 rounded-full filter blur-xl pointer-events-none" />
+            
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-xl bg-red-500/10 flex items-center justify-center text-red-500 border border-red-500/20 shrink-0">
+                <Trash2 className="w-5 h-5 animate-pulse" />
+              </div>
+              <div className="space-y-1.5 flex-1 min-w-0">
+                <h3 className="text-zinc-100 font-display font-semibold text-base leading-snug">
+                  Excluir Roteiro da Nuvem?
+                </h3>
+                <p className="text-zinc-400 text-xs leading-relaxed">
+                  Tem certeza de que deseja deletar o roteiro <strong className="text-zinc-200 font-bold break-all">"{deleteTargetName}"</strong> de forma permanente da nuvem? Esta ação não pode ser desfeita.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-zinc-800/60">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteTargetId(null);
+                  setDeleteTargetName(null);
+                }}
+                className="px-4 py-2 bg-zinc-900 hover:bg-zinc-850 text-zinc-350 hover:text-zinc-200 border border-zinc-800 rounded-lg text-xs font-bold uppercase tracking-wider transition-all cursor-pointer min-h-[44px] min-w-[80px]"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteFromCloud}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all cursor-pointer min-h-[44px] min-w-[80px] shadow-lg shadow-red-600/20 active:scale-95 flex items-center justify-center"
+              >
+                Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

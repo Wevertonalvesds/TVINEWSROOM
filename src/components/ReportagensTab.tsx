@@ -119,17 +119,19 @@ export default function ReportagensTab({ currentUser, colaboradores = [], regist
       console.error('Error loading local reportagens', e);
     }
 
-    const isCloudUser = currentUser && currentUser.uid !== 'espelho-rede-tvi-master' && currentUser.uid !== 'offline-editor';
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
     if (!isCloudUser) {
       setIsLoading(false);
       return;
     }
 
     const q = query(collection(db, 'reportagens'));
+    let hasCheckedSync = false;
 
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       // If cloud is completely empty but local has data, migrate local data to the cloud
-      if (querySnapshot.empty && loadedRep.length > 0) {
+      if (querySnapshot.empty && loadedRep.length > 0 && !hasCheckedSync) {
+        hasCheckedSync = true;
         console.log('Sincronizador: Nuvem vazia para "reportagens", migrando cache local...');
         loadedRep.forEach(async (rep) => {
           try {
@@ -155,6 +157,8 @@ export default function ReportagensTab({ currentUser, colaboradores = [], regist
         });
         return;
       }
+
+      hasCheckedSync = true;
 
       const cloudRep: Reportagem[] = [];
       querySnapshot.forEach((docSnap) => {
@@ -314,7 +318,7 @@ export default function ReportagensTab({ currentUser, colaboradores = [], regist
     };
 
     let updatedList = [...reportagens];
-    const isCloudUser = currentUser && currentUser.uid !== 'espelho-rede-tvi-master' && currentUser.uid !== 'offline-editor';
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
 
     try {
       if (activeTab.type === 'edit') {
@@ -370,7 +374,7 @@ export default function ReportagensTab({ currentUser, colaboradores = [], regist
     setReportagens(remaining);
     localStorage.setItem(LOCAL_REP_KEY, JSON.stringify(remaining));
 
-    const isCloudUser = currentUser && currentUser.uid !== 'espelho-rede-tvi-master' && currentUser.uid !== 'offline-editor';
+    const isCloudUser = currentUser && currentUser.uid !== 'offline-editor';
     if (isCloudUser) {
       try {
         await deleteDoc(doc(db, 'reportagens', id));
